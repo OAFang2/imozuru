@@ -5,243 +5,237 @@
   <img alt="imozuru" src="assets/brand/logo/imozuru-lockup.svg" width="420">
 </picture>
 
-日本語 | [English](README.en.md)
+imozuru is a Claude Code skill that digs into an unfamiliar field, pulling one lead after another until it reaches the original sources.
+It applies ideas from information-seeking research in library and information science, such as Bates's berrypicking, Ellis's model of information-seeking behaviour, and Kuhlthau's Information Search Process.
 
-imozuruは知らない分野を原文にたどりつくまで芋づる式に掘るClaude Codeのスキルです。
-Batesのberrypicking、Ellisの探索行動のモデル、Kuhlthauの探索過程の研究など、図書館情報学の情報探索の研究から考え方を応用しています。
+An AI judges better in a field once it has collected that field's explicit knowledge and know-how.
+Gathering the explicit knowledge and know-how written in original sources, as material for the AI's judgement, has been imozuru's role from the start.
+The 2.0 major update puts the weight on what people read.
+It adds a detailed report that explains the field at the reader's level, and a dashboard that shows every investigation on one page.
+Changes by version are listed in [CHANGELOG.md](CHANGELOG.md).
 
-AIの判断能力は形式知・ノウハウを収集することで強化されます。
-原文に書かれた形式知・ノウハウを集めて、AIの判断の材料にすることが、imozuruの元からの役割です。
+The name comes from *imozuru-shiki* (芋づる式), the Japanese idiom for things coming up one after another, like sweet potatoes pulled up on a single vine.
 
-2.0のメジャーアップデートでは、人間が読むことに重点を置いて強化しました。
-調べた分野を読み手の水準に合わせて解説する詳細レポートと、すべての調査を1枚で見返せるダッシュボードを追加しています。
-バージョンごとの変更は [CHANGELOG.md](CHANGELOG.md) に記載しています。
+> **Language note**: The skill instructions and generated interfaces are in English. The workflow is designed for requests in English or Chinese, with Simplified Chinese as the default Chinese variant.
 
-## 既存のAI調査手法との差別化点
+## How it differs from existing AI research methods
 
-スキルなしで「調べて」と頼むと、LLMは検索上位の数件を読んで要約を返しがちです。
-要約はすぐに読めますが、判断に必要な細部が抜け落ちやすくなります。
-分野の用語を知らないうちは検索語も選べないため、検索は最初に思いついた言葉の範囲にとどまってしまいます。
+Ask an LLM to "look into" something without a skill, and it tends to read the top few search results and return a summary.
+A summary is quick to read, but the details users need for their own judgement tend to drop out.
+And while users don't know the field's terms they can't choose good search words, so the search ends up staying within the words they first thought of.
 
-imozuruはまず『分野の用語・中心にいる人・知見が集まる媒体』を押さえ、そこから引用やリンク、著者をたどって原文を集めます。
-集めた原文は要約せずに保存し、答えに必要な論点ごとに「どのファイルの何行目か」を示すところまでにとどめます。
-AIは集めた原文を材料に判断し、ユーザーは示された場所の原文を読んで、その判断の根拠を確認できます。
+imozuru first finds *the field's terms, its central people, and the venues where knowledge collects*, then follows citations, links, and authors from there to gather original sources.
+It saves them without summarising and goes only as far as pointing, for each point the answer needs, to "which file, which lines".
+The AI uses the gathered sources as material for its judgement, and the user can read the sources at the locations given to check what that judgement rests on.
 
-## スキルのフロー
+## The skill's flow
 
-<img src="assets/figures/flow.webp" alt="imozuruの流れ。1 問いと調査の論点を書く、2 地図づくり（用語・人・媒体）、3 たどる（引用・リンク・著者）、4 原文を保存する。調査の論点に原文が付いたかを確かめ、まだなら3へ戻ってもう一周する。付いたか飽和したら、5 抜き書きと詳細レポートを作り、6 ダッシュボードで見返す" width="720">
+<img src="assets/figures/flow-en.webp" alt="The imozuru flow. 1 Write the question and its points. 2 Map the field: terms, people, venues. 3 Follow citations, links and authors. 4 Save the sources. Check whether every point has a source; if not yet, go round again from 3. Once it does, or the search is saturated, 5 build the extract page and the detailed report, and 6 look back on the dashboard" width="720">
 
-Claudeはまず、問いと、答えるために必要な論点を3〜6個書き出します。
-次に、探し方を変えた2本の検索役（Webを検索するサブエージェント）で用語、人、媒体を集め、地図（`map.md`）にまとめます。
-その後、原文が見つかるまで参考文献や被引用、著者をたどっていきます。
-論文のない分野では、記事の中のリンクや「〇〇さんの記事を参考にした」という記述をたどります。
+Claude first writes down the question and the 3 to 6 points needed to answer it.
+Next, two searchers (subagents that search the web) with different approaches collect terms, people, and venues into a map (`map.md`). By default, one searches in English and one in Chinese. If useful Chinese terminology is unknown, start in English and use the discovered terms to search Chinese; apply the same process in reverse for a Chinese-established field.
+After that, it follows references, citing works, and authors until it finds the sources.
+In fields without papers, it follows links inside articles and notes such as "I based this on so-and-so's post".
 
-見つけた原文は `sources/` に保存し、404やログインを求めるページは中身を見て除きます。
-すべての論点に原文が付くか、新しい資料が出てこなくなったら探すのをやめます。
-最後に、原文から切り出した文を論点ごとに並べたページ（抜き書きのページ）と、その分野の解説（詳細レポート）を作ります。
+Sources it finds are saved to `sources/`, and 404 pages and login walls are dropped after checking their content.
+When every point has a source, or no new sources turn up, the search stops.
+Finally, it builds a page that lists passages cut from the sources, point by point (the extract page), and an explanation of the field (the detailed report).
 
-見張りのモード（`/imozuru watch <話題>`）は、ここまでの調査の流れとは別に動きます。
-掘って見つけた媒体（QiitaやZennのタグ、note、YouTube、ブログ、arXiv）の新着をRSSで集めて並べます。
+Watch mode (`/imozuru watch <topic>`) runs separately from the investigation flow above.
+It collects new posts from the venues a dig turned up (Qiita and Zenn tags, note, YouTube, blogs, arXiv) via RSS and lists them.
 
-## 入れ方
+## Install
 
-### Claude Code のプラグイン
+### As a Claude Code plugin
 
-このリポジトリをマーケットプレイスとして追加し、プラグインとして入れます。
+Add this repository as a marketplace and install the plugin.
 
 ```text
-/plugin marketplace add MaryCache/imozuru
+/plugin marketplace add OAFang2/imozuru
 /plugin install imozuru@imozuru
 ```
 
-プラグインにはバージョン番号を付けていないので、main にコミットが入るたびに新しいバージョンとして扱われます。
-自動で最新にしたいときは、`/plugin` のマーケットプレイスの画面で imozuru の自動更新を入れてください。
-手で更新するときは `claude plugin marketplace update imozuru` を実行します。
+Leave auto-update **off** for this marketplace entry so it never silently switches source or pulls upstream changes. Update only when you choose to, by intentionally pulling or reinstalling this fork from `https://github.com/OAFang2/imozuru`.
 
-### skills のCLI
+### With the skills CLI
 
-[skills](https://github.com/vercel-labs/skills) のCLIでも入れられます。
+You can also install it with the [skills](https://github.com/vercel-labs/skills) CLI.
 
 ```sh
-npx skills add MaryCache/imozuru
+npx skills add OAFang2/imozuru
 ```
 
-手動の場合は、`skills/imozuru/` を `~/.claude/skills/imozuru/` にコピーしてください。
+To install by hand, copy `skills/imozuru/` to `~/.claude/skills/imozuru/`.
 
-## 必要なもの
+## Requirements
 
-スクリプトはPython 3.10以上の標準ライブラリだけで動き、次のコマンドは入っていれば使います。
+The scripts run on the Python 3.10+ standard library alone, and use the following commands when they are installed.
 
-| コマンド | 使う場面 | 入っていない場合 |
+| Command | Used for | When missing |
 |---|---|---|
-| `pdftotext`（popplerかXpdf） | PDFから本文を取り出す | PDFの本文が取れず `FAIL` になる |
-| `pdftoppm`（popplerかXpdf）と `tesseract` | 文字の層がない古いPDFをOCRにかける | そのPDFは `FAIL` になる |
-| `tesseract` の言語データ `jpn` と `jpn_vert` | 日本語のスキャンPDFを、横書きも縦書きも読む（入っていれば自動で使う。環境変数 `IMOZURU_OCR_LANG` で `jpn+eng` のように指定もできる） | 英語だけで読む。日本語のPDFは読み取りの確信度が低いので `FAIL` になる |
-| `yt-dlp` | YouTubeの字幕を取得する | 動画は `FAIL` になる |
-| [ax](https://github.com/yusukebe/ax) | HTMLをmarkdownにする | 標準ライブラリで文字だけを取り出す（見出しや表の形はaxのほうがよく残る） |
+| `pdftotext` (poppler or Xpdf) | Extracting text from PDFs | The PDF text cannot be read and the fetch reports `FAIL` |
+| `pdftoppm` (poppler or Xpdf) and `tesseract` | OCR for old PDFs with no text layer | That PDF reports `FAIL` |
+| `tesseract` language data `chi_sim` (and `chi_tra` when useful) | Reading Simplified and Traditional Chinese scans alongside English (used automatically when installed; set `IMOZURU_OCR_LANG`, e.g. `chi_sim+eng`, to choose). Optional `jpn` and `jpn_vert` packs are also used when installed. | OCR runs in English only; Chinese scans may report `FAIL` when recognition confidence is low |
+| `yt-dlp` | Downloading YouTube captions | Videos report `FAIL` |
+| [ax](https://github.com/yusukebe/ax) | Turning HTML into Markdown | Falls back to the standard library and extracts the text only (ax keeps headings and tables better) |
 
-引用をたどる `chain.py` は [OpenAlex](https://openalex.org/) のAPIを使いますが、APIキーは必要ありません。
+`chain.py`, which follows citations, uses the [OpenAlex](https://openalex.org/) API, and no API key is needed.
 
-## 使い方
+## Usage
 
-Claude Codeで、次のように頼みます。
-
-```
-芋づる式に調べて: 歌ってみたのMIXで、上手い人がどういう順番で処理しているか
-```
+Ask Claude Code something like this.
 
 ```
-Gaussian Splattingってよく聞くけど全然わからない。論文とか解説の流れを掘ってほしい
+Dig into this: in vocal-cover mixing, in what order do skilled mixers apply their processing?
+```
+
+```
+I keep hearing about Gaussian Splatting but have no idea what it is. Trace the papers and explainers back to their sources.
 ```
 
 ```
 /imozuru watch react
 ```
 
-結果は `~/research/<話題>/` に、次の形で保存されます。
+Results are saved to `~/research/<topic>/` in this form.
 
 ```
-map.md         問い・題・調査の論点・用語・人・媒体・原文の表・次の手がかり
-log.md         周ごとに、何を探して何が出たか・判断とその理由
-sources/       保存した原文
-extracts.json  抜き書き
-report.html    抜き書きのページ
-queries.jsonl  検索語ごとのヒットの全件
-fetch-log.jsonl 取得の記録（URL と OK/FAIL）
-digest.json    詳細レポートの解説
-digest.html    詳細レポート（Lv1〜Lv3 の解説と、検索の全記録）
+map.md         question, short title, research points, terms, people, venues, source table, next leads
+log.md         per round: what was searched, what turned up, decisions and why
+sources/       saved sources
+extracts.json  extracts
+report.html    extract page
+queries.jsonl  every hit for every search query
+fetch-log.jsonl fetch record (URL and OK/FAIL)
+digest.json    explanation for the detailed report
+digest.html    detailed report (explanations at Lv1 to Lv3, plus the full search record)
 ```
 
-## 人間が読む・見返す
+## Reading and looking back
 
-集めた原文は、人間が読んで判断できる形で見せます。
+The sources are shown in forms a person can read and judge for themselves.
 
-### 抜き書きのページ
+### Extract page
 
-原文から切り出した文を、調査の論点ごとに並べたページです。
-見本は `examples/demo/` にあり、次のコマンドでスクリプトだけを試せます。
+A page that lists passages cut from the sources, point by point.
+A sample is in `examples/demo/`, and this command tries the script on its own.
 
 ```sh
 python3 skills/imozuru/scripts/report.py examples/demo
 ```
 
-切り出した文を機械で照合する理由は、下の「抜き書きを機械で照合する理由」に書いています。
+Why the passages are checked by machine is explained under "Why extracts are checked by machine" below.
 
-### 詳細レポート
+### Detailed report
 
-調べた分野を、前提知識の違う読み手ごとに3編で解説するページです。
-解説の1文ごとに原文の引用が根拠として付き、何を探して何が出たかの全記録も一緒に載ります。
+A page that explains the field in three versions for readers with different background knowledge.
+Every sentence carries a quotation from a source as its evidence, and the full record of what was searched and what turned up comes with it.
+Claude writes the explanation once the search has stopped, and `digest.py` checks every quotation against the sources before building the page.
+Why it has two layers, explanation and record, is explained under "The two layers of the detailed report" below.
 
-調べ終えたあとにClaudeが解説を書き、`digest.py` が引用を原文と照合してからページにします。
-解説と記録の2層に分けた理由は下の「詳細レポートの2層」に書いています。
+### Research dashboard
 
-### 調査記録のダッシュボード
-
-<img src="assets/screenshots/dashboard.webp" alt="調査記録のダッシュボード。左のサイドバーにトピックが並び、右に選んだトピックの詳細が開いている" width="720">
-
-2.0で追加したページです。
-調査の置き場（既定 `~/research`）にあるすべての調査を、トピックごとに1枚のページへまとめます。
-トピックは1つの問いを調べたひとまとまりで、`~/research` の中のフォルダ1つに当たります。
+This page was added in 2.0.
+The dashboard brings every investigation in the research folder (by default `~/research`) together on one page, one topic each.
+A topic is one question and everything gathered for it, which is one folder inside `~/research`.
 
 ```sh
 python3 skills/imozuru/scripts/dashboard.py ~/research
 ```
 
-`~/research/index.html` ができます。
+This writes `~/research/index.html`.
+The home view summarises why each investigation stopped, where the sources came from, and how many rounds of following citations and links it took.
+Choosing a topic in the sidebar opens its details: research points, rounds, sources, and documents; the detailed report and the extract page open inside the same view.
+The sidebar search covers titles, questions, terms, people, and venues. Legacy Japanese records also support hiragana and romaji matching.
+The "?" button at the top right opens the help, which explains each part of the screen.
+While a document is open, the button at the bottom left saves it as a PDF, and the speech-bubble button at the top right sends feedback to the author.
 
-ホームには、調べるのをやめた理由（終了理由）・原文の取得元・引用やリンクをたどった回数（周回数）の集計が並びます。
-左のサイドバーからトピックを選ぶと、調査の論点・周回数・原文・文書をまとめたトピック詳細が開き、詳細レポートや抜き書きもその中で読めます。
-サイドバーの検索は題名・疑問・用語・人物・媒体を対象にし、ひらがなやローマ字でも一致します。
-画面の使い方は右上の「?」から開くヘルプにまとめています。
-文書は表示中に左下のボタンでPDFに保存でき、右上の吹き出しのボタンからは作者へ感想・要望を送れます。
+### On a phone
 
-### スマホで見る
-
-ダッシュボードを配信すると、スマホのブラウザからも閲覧できます。
+Serving the dashboard lets you open it in a phone's browser.
 
 ```sh
-IMOZURU_SERVE_TOKEN=<合言葉> python3 skills/imozuru/scripts/dashboard.py ~/research --serve 8765
+IMOZURU_SERVE_TOKEN=<passphrase> python3 skills/imozuru/scripts/dashboard.py ~/research --serve 8765
 tailscale serve --bg 8765
 ```
 
-配信はPCの中（127.0.0.1）だけで待ち受け、合言葉の付いたURLでしか開けません。
-スマホからはTailscaleで自分の機器にだけ中継して、`https://<PCの名前>.<tailnet>.ts.net/?k=<合言葉>` を開きます。
-`<tailnet>` は、Tailscaleの管理画面に出るネットワークの名前です。
+The server listens only inside the PC (127.0.0.1), and a page opens only with the passphrase in its URL.
+From the phone, relay it to your own devices with Tailscale and open `https://<pc-name>.<tailnet>.ts.net/?k=<passphrase>`.
+`<tailnet>` is the network name shown in the Tailscale admin console.
+The environment variable `IMOZURU_SERVE_TOKEN` fixes the passphrase (16 characters or more).
+Without it, the passphrase changes on every start, and an icon added to the home screen stops opening the page.
 
-合言葉は環境変数 `IMOZURU_SERVE_TOKEN` で固定できます（16文字以上）。
-固定しないと起動のたびに変わり、ホーム画面に追加したアイコンから開けなくなります。
+The served page can be installed as an app, on a phone and in Chrome or Edge on a PC.
+The install button at the top right opens the browser's install prompt, or shows the steps for that browser.
+The installed app opens without typing the passphrase.
 
-配信した画面はアプリとして入れられます。
-スマホでもパソコンのChrome・Edgeでも、右上の入れるボタンを押すと、ブラウザの入れる画面か、そのブラウザでの手順が出ます。
-入れたアプリは合言葉を入力せずに開けます。
+## Design
 
-## 設計の考え方
+### Why it does not summarise
 
-### 要約しない理由
+Kuhlthau (1991) describes how summarising in detail during the confused early stage of a search invites premature closure and gets in the way of the search process.
+So while it is searching, imozuru stops at pointing to where things are in the sources.
+Explanation is written only after the stop decision, in the detailed report.
 
-Kuhlthau（1991）は調べ始めの混乱した段階で詳しくまとめると、早すぎる閉じ（premature closure）を招き、探索の過程が妨げられると述べています。
-そのためimozuruは、調べている間は原文の場所を示すところまでにとどめています。
-解説を書くのは、止める判定が出たあとの詳細レポートだけです。
+### When to stop
 
-### 止めどきの決め方
+There are two conditions.
+The first is that every point has a location in a source, following HALT by Roh and Han (2026), which decides when to stop by whether the evidence is in.
+To keep the points from all being answerable without reading a source, at least one carries a condition from the request's own wording, and more than half cannot be answered without reading a source.
 
-止める条件は2つです。
-1つ目はすべての論点に原文の場所が付くことです。
-この条件は、証拠がそろったかで止めどきを決めるRohとHan（2026）のHALTにならいました。
-論点が原文を読まずに答えられる形ばかりにならないよう、少なくとも1つは依頼の言葉の条件をそのまま含め、半分以上は原文を読まないと答えられない形にしています。
+The second is saturation: if 70% or more of the sources the two searchers list are already on the map, the search stops.
+This borrows the idea of estimating a total from the overlap between two independent searches (Kastner 2007), and the 70% is a provisional threshold set through trial runs.
 
-2つ目は飽和です。
-2本の検索役が挙げた資料の7割以上がすでに地図にあれば止めます。
-独立した2回の探索の重なりから全体の数を見積もる考え方（Kastner 2007）を借りたもので、7割は試行で決めた仮の目安です。
+### Why it does not commit to one direction
 
-### 方向を1つに決めない理由
+According to Zhou et al. (2026, HypoSearch), when several directions are still possible, AI search tends to pick one and keep choosing it in later searches until it fails.
+So when unsure, imozuru runs two searchers with different hypotheses and compares the results before moving on.
 
-Zhouら（2026）のHypoSearchによると、AIの検索は方向がいくつもありうる段階で1つを選び、後の検索も同じ方向へ重ねて失敗しがちです。
-そこで迷ったときは、別の仮説を持たせた検索役を2本並べ、結果を比べてから進みます。
+### Fields without papers
 
-### 論文のない分野の扱い
+In fields with few papers, such as painting techniques or audio mixing, much of the know-how lives in personal blogs and videos.
+imozuru follows those the same way it follows papers, so each saved source gets one of the following labels, and which to trust is up to the user.
 
-塗り方やMIXのように論文がほとんどない分野では、知見の多くが個人のブログや動画にあります。
-imozuruはそうした記事も論文と同じようにたどるので、保存した原文には次の印を付け、どれを信じるかはユーザーに任せています。
+- [Paper] peer-reviewed or conference papers, arXiv preprints
+- [First-hand] a record by the person who did it (the process of trying, making, or measuring it themselves)
+- [Observation] notes on someone else's work or methods
+- [Roundup] articles that collect or restate others' findings
+- [Official] documents from the maker of the tool or product
 
-- 〔論文〕査読や学会を通ったもの、arXivのプレプリント
-- 〔本人〕やった本人の記録（自分で試した、作った、測った過程が書いてあるもの）
-- 〔観察〕他人の作品ややり方を見て、特徴を書き出したもの
-- 〔まとめ〕他人の知見を集めたり言い換えたりした記事
-- 〔公式〕道具や製品を作った側の文書
+### Why extracts are checked by machine
 
-### 抜き書きを機械で照合する理由
+Dozens of saved sources leave the user with no idea where to start.
+So, following extracting from Ellis's model, the skill builds a page that cuts the relevant passage from a source for each point.
+So that no paraphrase slips in when Claude cuts out the passages, `report.py` checks that each extract appears verbatim at the given lines of its source, and if even one word differs, it does not build the page.
 
-原文を何十本も保存しただけでは、どこから読めばよいか分かりません。
-そこでEllisのモデルにある抜き書き（extracting）にならい、論点ごとに原文の該当部分を切り出したページを作ります。
-Claudeが切り出すときに言い換えが紛れ込まないよう、`report.py` は、切り出した文が原文の指定の行にそのまま在るかを照合し、1語でも違えばページを作りません。
+### The two layers of the detailed report
 
-### 詳細レポートの2層
+The detailed report was added in 2.0.
+Extracts alone do not tell a newcomer what the terms mean or what to read first.
+So after stopping, the skill builds a detailed report with two layers: explanation and record.
+The explanation comes in three levels.
 
-詳細レポートは2.0で追加した文書です。
-抜き書きだけでは、その分野を知らない人には言葉の意味も読む順も分かりません。
-そこで止めたあとに、解説と記録の2層からなる詳細レポートを作ります。
-解説は読み手の水準で3編に分けます。
+- Lv1: what happens, for readers with no background.
+- Lv2: the mechanism, for readers who know a neighbouring field.
+- Lv3: where the standard account has been revised and what is still open, for specialists.
 
-- Lv1：前提知識の無い人向けに、何が起きているかを書きます。
-- Lv2：近い分野を知っている人向けに、仕組みを書きます。
-- Lv3：その分野の専門の人向けに、通説の修正や未決着の点を書きます。
+At every level, each sentence carries a verbatim quote from a source as its evidence.
+`digest.py` checks those quotes the same way as the extracts, and refuses to build the page if any sentence lacks one.
+The record is assembled by machine from every hit of every query and from the fetch results, so it shows everything that was searched and found, including queries that found nothing.
 
-どの編も1文ごとに原文からの引用を根拠として付けます。
-`digest.py` は抜き書きと同じ方法で引用を照合し、根拠の無い文が1つでもあればページを作りません。
-記録は検索語ごとのヒットの全件と取得の結果から機械で組むので、空振りの検索語も含めて、何を探して何が出たかがそのまま見えます。
+## Where the rules come from
 
-## 決まりの出典
+`skills/imozuru/references/theory.md` lists which paper, and which part of it, each rule in the skill comes from.
 
-スキルの各決まりがどの論文のどこから来ているかは、`skills/imozuru/references/theory.md` にまとめています。
+## Cautions
 
-## 注意点
+- The searchers search the web, so the content of your question leaves your machine as search terms. Don't use the skill for research involving confidential or personal data.
+- The skill does not use ways around paywalls, and sources it cannot reach are reported as "not reached".
+- Saved sources are copies for reading locally, so please don't redistribute them.
+- The fetching scripts only fetch http(s) URLs, and never fetch local or internal addresses (127.0.0.1, 192.168.x.x and so on), so that a crafted URL in search results cannot read services running on your machine. Some VPN and proxy tools resolve even public site names to internal addresses, and then nothing can be fetched. Only in that case, set the environment variable `IMOZURU_ALLOW_PRIVATE=1` to turn this address check off. When using a proxy, the proxy resolves the hostname, so pinning the connection to a checked IP cannot prevent DNS rebinding.
 
-- 検索役はWebを検索するため、問いの内容が検索語として外部に送られます。機密情報や個人データが関わる調べものには使わないでください。
-- 有料の論文を回避して入手する手段は使わず、取得できなかったものは「届かなかった」と報告します。
-- 保存した原文は手元で読むための写しなので、再配布しないでください。
-- 原文を取るスクリプトは、http(s) 以外のURLと、手元や内側の宛先（127.0.0.1、192.168.x.xなど）には取りに行きません。検索結果に細工したURLを置かれて、手元で動いているサービスの中身を読まれないようにするためです。VPNやプロキシの道具によっては、外のサイトの名前まで内側の宛先に引けることがあり、そのときは何も取れなくなります。その場合だけ、環境変数 `IMOZURU_ALLOW_PRIVATE=1` を設定すると、この宛先の検査を外せます。プロキシを通すときは名前をプロキシが引くので、検査したIPへつなぐ形ではDNS rebindingを防げません。
-
-## ライセンス
+## License
 
 MIT
+
+This repository is the OAFang2/imozuru fork. The original upstream project is MaryCache/imozuru.

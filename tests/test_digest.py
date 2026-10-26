@@ -67,7 +67,7 @@ class DigestTests(unittest.TestCase):
 
     def build_report(self):
         data = {"title": "夕焼け", "question": "なぜ赤いか", "stopped": "照合済み",
-                "claims": [{"claim": "散乱", "status": "根拠あり", "quotes": sentence("")["quotes"]}]}
+                "claims": [{"claim": "散乱", "status": "supported", "quotes": sentence("")["quotes"]}]}
         (self.topic / "extracts.json").write_text(json.dumps(data), encoding="utf-8")
         with patch.object(sys, "argv", ["report.py", str(self.topic)]), contextlib.redirect_stdout(io.StringIO()):
             return digest.report.main()
@@ -76,7 +76,7 @@ class DigestTests(unittest.TestCase):
         code, _ = self.build()
         self.assertEqual(code, 0)
         page = (self.topic / "digest.html").read_text(encoding="utf-8")
-        for name in ("Lv1", "Lv2", "Lv3", "調べたこと", "調査を区切った理由"):
+        for name in ("Lv1", "Lv2", "Lv3", "Question", "Stop reason"):
             self.assertIn(name, page)
         self.assertIn("Blue light scatters more than red light.", page)
 
@@ -84,7 +84,7 @@ class DigestTests(unittest.TestCase):
         self.data["levels"]["lv1"]["summary"].append({"text": "根拠の無い文。", "quotes": []})
         code, out = self.build()
         self.assertEqual(code, 1)
-        self.assertIn("根拠の引用が無い", out)
+        self.assertIn("no evidence quotation", out)
         self.assertFalse((self.topic / "digest.html").exists())
 
     def test_paraphrased_quote_is_rejected(self):
@@ -92,7 +92,7 @@ class DigestTests(unittest.TestCase):
             sentence("言い換え。", 2, "Blue light is scattered more strongly.")]
         code, out = self.build()
         self.assertEqual(code, 1)
-        self.assertIn("原文に見つからない引用", out)
+        self.assertIn("quotation not found in source", out)
 
     def test_quote_outside_sources_is_rejected(self):
         self.data["people_places"] = [sentence("外。", 1, "x") | {"quotes": [{"file": "../digest.json", "line": 1, "text": "{"}]}]
@@ -103,7 +103,7 @@ class DigestTests(unittest.TestCase):
         del self.data["levels"]["lv3"]
         code, out = self.build()
         self.assertEqual(code, 1)
-        self.assertIn("Lv3が無い", out)
+        self.assertIn("Lv3 is missing", out)
 
     def test_failed_build_keeps_prior_page(self):
         (self.topic / "digest.html").write_text("Previous", encoding="utf-8")
@@ -127,10 +127,10 @@ class DigestTests(unittest.TestCase):
         code, _ = self.build()
         self.assertEqual(code, 0)
         page = (self.topic / "digest.html").read_text(encoding="utf-8")
-        self.assertIn("検索 2本・ヒット 3件・空振り 1本", page)
-        self.assertIn("ヒット0", page)
-        self.assertIn("未取得", page)
-        self.assertIn("取得失敗", page)
+        self.assertIn("Queries 2 · hits 3 · no-result queries 1", page)
+        self.assertIn("0 hits", page)
+        self.assertIn("Not fetched", page)
+        self.assertIn("Fetch failed", page)
         self.assertIn("paper.txt", page)
         # 検索で挙がっていない取得も隠さず出す
         self.assertIn("other.example.test/x", page)
@@ -158,13 +158,13 @@ class DigestTests(unittest.TestCase):
                 with contextlib.redirect_stderr(io.StringIO()) as err:
                     self.assertEqual(self.build()[0], 1)
                 self.assertIn("queries.jsonl", err.getvalue())
-                self.assertIn("周（round）が整数でない", err.getvalue())
+                self.assertIn("round is not an integer", err.getvalue())
                 self.assertEqual(prior.read_text(encoding="utf-8"), "Previous")
 
     def test_record_round_is_escaped_on_output(self):
         rnd = "<img src=x onerror=alert(1)>"
         page = digest.records_html([{"round": rnd, "query": "q", "by": "a", "method": "m", "hits": []}], {})
-        self.assertIn("&lt;img src=x onerror=alert(1)&gt;周目", page)
+        self.assertIn("Round &lt;img src=x onerror=alert(1)&gt;", page)
         self.assertNotIn(rnd, page)
 
     def test_page_writes_ignore_planted_old_temp_symlinks(self):
@@ -197,24 +197,24 @@ class DigestTests(unittest.TestCase):
         self.assertNotIn('href="javascript:', page)
 
     def test_quiz_answer_needs_quote(self):
-        self.data["levels"]["lv1"]["quiz"] = [{"q": "なぜ赤い？", "answer": [{"text": "根拠なし", "quotes": []}]}]
+        self.data["levels"]["lv1"]["quiz"] = [{"q": "なぜ赤い？", "answer": [{"text": "unsupported", "quotes": []}]}]
         code, out = self.build()
         self.assertEqual(code, 1)
-        self.assertIn("問い", out)
+        self.assertIn("answer to", out)
         self.data["levels"]["lv1"]["quiz"] = [{"q": "なぜ赤い？", "answer": [sentence("青が先に散る。")]}]
         code, _ = self.build()
         self.assertEqual(code, 0)
-        self.assertIn("理解の確認", (self.topic / "digest.html").read_text(encoding="utf-8"))
+        self.assertIn("Check your understanding", (self.topic / "digest.html").read_text(encoding="utf-8"))
 
     def test_claim_status_is_checked(self):
         self.data["claims"] = [{"claim": "仕組み", "status": "たぶん"}]
         self.assertEqual(self.build()[0], 1)
-        self.data["claims"] = [{"claim": "仕組み", "status": "一部のみ"}]
+        self.data["claims"] = [{"claim": "仕組み", "status": "partially supported"}]
         self.assertEqual(self.build()[0], 0)
         # 2026-10-21 より前の言葉も読み替えて通す
         self.data["claims"] = [{"claim": "仕組み", "status": "一部だけ"}]
         self.assertEqual(self.build()[0], 0)
-        self.assertIn(">一部のみ<", (self.topic / "digest.html").read_text(encoding="utf-8"))
+        self.assertIn(">partially supported<", (self.topic / "digest.html").read_text(encoding="utf-8"))
 
     def test_script_is_allowed_only_by_its_hash(self):
         import base64
@@ -282,7 +282,7 @@ class ChainLogTests(unittest.TestCase):
 
     def test_chain_log_validates_record_before_appending(self):
         with tempfile.TemporaryDirectory() as tmp:
-            with self.assertRaisesRegex(ValueError, "周（round）が整数でない"):
+            with self.assertRaisesRegex(ValueError, "round is not an integer"):
                 chain.log(tmp, "<b>1</b>", "find", "q", [])
             self.assertFalse((Path(tmp) / "queries.jsonl").exists())
 

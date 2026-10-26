@@ -1,21 +1,13 @@
 #!/usr/bin/env python3
-"""調べものの履歴を1枚のページ（index.html）にする。調査の置き場（既定 ~/research）を走査する。
+"""Build one index.html dashboard from a research directory.
 
-人が後から見返すためのページ。ホームには調査をまたいだ集計を3つだけ置き、左の一覧から調査を選ぶと
-その調査の詳細（調査の論点・周回・原文・文書へのリンク）が開く。
-
-数字は手元の記録から機械で数え、どの記録から数えたかと、何件の調査に記録があったかを必ず添える。
-古い調査には検索や取得の記録（queries.jsonl・fetch-log.jsonl）が無く、0 と区別して「記録なし」と出す。
-
-使い方:
+Usage:
     dashboard.py [research_dir] [--runs runs.md] [--out index.html]
-        research_dir … 調査の置き場（既定 ~/research）。直下のフォルダを1件の調査として読む
-        --runs       … 回した記録の台帳（任意）。「調査を区切った理由」「感覚と合った？」の列を読む
-        --out        … 書き出す先（既定 <research_dir>/index.html）
-        --bundle DIR … ページと各調査の文書（詳細レポート・抜き書き・map.md・log.md）だけを DIR に写す。
-                       原文（sources/）は写さない。スマホで見るためにどこかへ載せる束で、入れたファイルの一覧を出す
-        --serve [PORT] … ページと文書を 127.0.0.1:PORT（既定 8765）で配る。読み取り専用で、合言葉つきの URL を出す。
-                       合言葉は IMOZURU_SERVE_TOKEN で固定できる（スマホのブックマークを保つため）
+        research_dir defaults to ~/research
+        --runs reads an optional run ledger
+        --out selects the output path
+        --bundle copies generated documents, but not sources/
+        --serve serves a read-only dashboard on 127.0.0.1
 """
 
 import base64
@@ -42,18 +34,18 @@ esc = lambda s: html.escape(str(s), quote=True)  # noqa: E731
 # 分類はページで「自動分類」と明示し、元の文を必ず並べて見せる（分類の誤りを読み手が確かめられるように）
 # 区切った理由の分類ごとの標本の色（.rc1〜.rc4）。記録欠落は色を付けず破線
 # 分類名は4字の熟語にそろえる（2026-10-21 かしぇ「長くてAIっぽくて統一感がなくて冗長」）
-REASON_COLOR = {"論点充足": 1, "一部充足": 2, "期限到達": 3, "取得不可": 4}
+REASON_COLOR = {"Complete": 1, "Partial": 2, "Limit reached": 3, "Blocked": 4}
 REASON_RULES = (
-    ("期限到達", ("約束", "打ち切", "試験運転", "上限")),
-    ("取得不可", ("ログイン", "有料", "壁", "ボット", "CAPTCHA", "取れない", "取得できな", "購読")),
-    ("情報飽和", ("飽和",)),
-    ("周回上限", ("4周",)),
-    ("論点充足", ("被覆", "根拠あり", "全部に原文", "全部付いた", "原文が付いた", "原文の場所が付いた")),
-    ("一部充足", ("一部", "区切", "停止", "まで", "打ち止め", "判断")),
+    ("Limit reached", ("agreed limit", "time limit", "round limit", "約束", "打ち切", "試験運転", "上限")),
+    ("Blocked", ("login", "paywall", "paid", "access wall", "bot", "CAPTCHA", "ログイン", "有料", "壁", "ボット", "取れない", "取得できな", "購読")),
+    ("Saturated", ("saturat", "飽和")),
+    ("Round limit", ("four rounds", "4 rounds", "4周")),
+    ("Complete", ("all research points", "every research point", "supported", "被覆", "根拠あり", "全部に原文", "全部付いた", "原文が付いた", "原文の場所が付いた")),
+    ("Partial", ("partial", "stopped", "一部", "区切", "停止", "まで", "打ち止め", "判断")),
 )
 # 「論点6/6に原文」のように分子と分母が同じなら、全部そろったとみなす
 ALL_ATTACHED = re.compile(r"(\d+)\s*/\s*\1\s*に原文")
-ROUND_HEAD = re.compile(r"^#{2,4}\s*(\d+)\s*周目", re.M)
+ROUND_HEAD = re.compile(r"^#{2,4}\s*(?:Round\s*)?(\d+)(?:\s*周目)?", re.M | re.I)
 CHECK_ITEM = re.compile(r"^\s*-\s*\[([ xX])\]\s*(.+)$", re.M)
 SOURCE_ROW = re.compile(r"^\|(.+)\|\s*$", re.M)
 URL = re.compile(r"https?://[^\s|)>\]]+")
@@ -63,11 +55,11 @@ SLUG = re.compile(r"[\w-]+")
 
 def classify(reason: str) -> str:
     if ALL_ATTACHED.search(reason) and not any(w in reason for w in REASON_RULES[0][1] + REASON_RULES[1][1]):
-        return "論点充足"
+        return "Complete"
     for label, words in REASON_RULES:
         if any(w in reason for w in words):
             return label
-    return "その他"
+    return "Other"
 
 
 def section(text: str, heading: str) -> str:
@@ -91,7 +83,7 @@ def section_prefix(text: str, heading: str) -> str:
 
 
 # 一覧の検索で探す map.md の節。古い map.md は媒体を「場」と書いた
-WORD_SECTIONS = (("用語", ("用語",)), ("人", ("人",)), ("媒体", ("媒体", "場")))
+WORD_SECTIONS = (("Term", ("Terms", "用語")), ("Person", ("People", "人")), ("Venue", ("Venues", "媒体", "場")))
 TITLE_MAX = 20  # 題の字数。スマホの一覧で1行に収まる長さ。超えたら作るときに警告する（切りはしない）
 WORD_MAX = 120  # 1項目の長さ。説明の続きや場所の注記まで入れると、関係の無い語にも当たる
 
@@ -176,7 +168,7 @@ def count_sources(src: Path) -> int:
 def source_hosts(map_text: str) -> list[str]:
     """map.md の原文の表から、元の URL のホストを1行1つ拾う。"""
     hosts = []
-    for row in SOURCE_ROW.findall(section(map_text, "原文（sources/）") or section(map_text, "原文")):
+    for row in SOURCE_ROW.findall(section(map_text, "Original sources (sources/)") or section(map_text, "原文（sources/）") or section(map_text, "原文")):
         if set(row.replace("|", "").strip()) <= set("-: "):
             continue
         m = URL.search(row)
@@ -194,15 +186,15 @@ def source_hosts(map_text: str) -> list[str]:
 def topic_info(d: Path, runs: list[dict]) -> dict:
     map_text, log_text = read(d / "map.md"), read(d / "log.md")
     info: dict = {"slug": d.name, "has_map": bool(map_text)}
-    q = re.search(r"^問い[:：]\s*(.+)$", map_text, re.M)
+    q = re.search(r"^(?:Question|問い)[:：]\s*(.+)$", map_text, re.M | re.I)
     info["question"] = q.group(1).strip() if q else ""
     # 一覧の検索で、漢字の語をひらがなやローマ字でも当てるための読み。調べるときに問いの主な語の読みを書く。
     # 読みの辞書は外部のデータしか無く（Migemo も Sudachi も）、標準ライブラリだけでは付けられない（2026-10-22 かしぇ「map.md に読みを書く」）
-    r = re.search(r"^読み[:：]\s*(.+)$", map_text, re.M)
+    r = re.search(r"^(?:Reading|読み)[:：]\s*(.+)$", map_text, re.M | re.I)
     info["reading"] = r.group(1).strip() if r else ""
     # 一覧と詳細の見出しに出す短い題。問いは調べる範囲を決める文で長くなるので、見出しは別に持つ
     # （2026-10-22 かしぇ「タイトルに文字数制限つけるか」→ 問いは縛らず、20字までの「題:」を足す）
-    ti = re.search(r"^題[:：]\s*(.+)$", map_text, re.M)
+    ti = re.search(r"^(?:Title|題)[:：]\s*(.+)$", map_text, re.M | re.I)
     info["title"] = ti.group(1).strip() if ti else ""
     date = re.search(r"(20\d\d-\d\d-\d\d)", log_text) or re.search(r"(20\d\d-\d\d-\d\d)", map_text)
     info["date"] = date.group(1) if date else ""
@@ -228,23 +220,25 @@ def topic_info(d: Path, runs: list[dict]) -> dict:
             if not claims and isinstance(data.get("claims"), list):
                 claims = [(c.get("claim", ""), c.get("status", "")) for c in data["claims"] if isinstance(c, dict)]
     if not claims:
-        claims = [(text.strip(), "根拠あり" if mark.lower() == "x" else "未確認")
-                  for mark, text in CHECK_ITEM.findall(section(map_text, "調査の論点"))]
-    old = {"付いた": "根拠あり", "一部だけ": "一部のみ", "付かなかった": "根拠なし"}
+        points = section(map_text, "Research points") or section(map_text, "調査の論点")
+        claims = [(text.strip(), "supported" if mark.lower() == "x" else "unverified")
+                  for mark, text in CHECK_ITEM.findall(points)]
+    old = {"付いた": "supported", "一部だけ": "partially supported", "付かなかった": "unsupported",
+           "根拠あり": "supported", "一部のみ": "partially supported", "根拠なし": "unsupported"}
     info["claims"] = [(c, old.get(s, s)) for c, s in claims]
 
     run = match_run(d.name, runs)
     info["run"] = run
     reason = (run or {}).get("調査を区切った理由") or info.get("stopped") or ""
     info["reason"] = reason
-    info["reason_class"] = classify(reason) if reason else "記録欠落"
+    info["reason_class"] = classify(reason) if reason else "No record"
 
     info["searches"] = len(records) if records else None
     info["hits"] = sum(len(r.get("hits", [])) for r in records) if records else None
     fetches = load_jsonl(d / "fetch-log.jsonl")
     info["fetch_ok"] = sum(1 for f in fetches if f.get("status") == "OK") if fetches else None
     info["fetch_ng"] = sum(1 for f in fetches if f.get("status") == "FAIL") if fetches else None
-    info["docs"] = [(name, label) for name, label in (("digest.html", "詳細レポート"), ("report.html", "抜き書き"),
+    info["docs"] = [(name, label) for name, label in (("digest.html", "Detailed report"), ("report.html", "Extracts"),
                                                        ("map.md", "map.md"), ("log.md", "log.md"))
                     if topic_file(d / name)]
     return info
@@ -260,9 +254,9 @@ def write_bundle(topics: list[dict], root: Path, dest: Path) -> int:
     for path in paths:
         for p in (path, *path.parents):
             if p.is_symlink():
-                raise ValueError(f"束の出力先にシンボリックリンクは使えない: {p}")
+                raise ValueError(f"Bundle output cannot use symbolic links: {p}")
     if dest.resolve() == root.resolve() or root.resolve() in dest.resolve().parents:
-        print(f"束の置き場は調査の置き場の外にする: {dest}", file=sys.stderr)
+        print(f"Bundle destination must be outside the research directory: {dest}", file=sys.stderr)
         return 2
     dest.mkdir(parents=True, exist_ok=True)
     (dest / "index.html").write_text(render(topics, root), encoding="utf-8")
@@ -284,8 +278,8 @@ def write_bundle(topics: list[dict], root: Path, dest: Path) -> int:
     size = sum((dest / f).stat().st_size for f in files)
     for f in files:
         print(f)
-    print(f"→ {dest}（{len(files)} ファイル・{size / 1e6:.1f} MB。原文は入れていない）")
-    print("注意: 詳細レポートと抜き書きには原文からの引用が入る。束を人に渡すときや公開の場所へ置くときは中身を確かめる")
+    print(f"→ {dest} ({len(files)} files, {size / 1e6:.1f} MB; original-source files are not included)")
+    print("Caution: detailed reports and extracts contain source quotations. Review the bundle before sharing or publishing it.")
     return 0
 
 
@@ -340,7 +334,7 @@ def with_back(name: str, data: bytes, slug: str, hud: bool = True, print_now: bo
     # ダッシュボードの本体の枠（iframe）に出すときは、ヘッダーと一覧が残るので戻るボタンは要らない（hud=False・窓口の ?embed=1）。
     # 束を枠に出したときは消せないので、押したら枠ではなく画面全体を戻す（target=_top）
     hud = (f'<style>{hud_css("dark")}</style>'
-           f'<a class="imz-hud" href="../index.html#t-{esc(slug)}" target="_top" aria-label="調査記録へ戻る">{HUD_ICON}</a>') if hud else ""
+           f'<a class="imz-hud" href="../index.html#t-{esc(slug)}" target="_top" aria-label="Back to research dashboard">{HUD_ICON}</a>') if hud else ""
     text = data.decode("utf-8", errors="replace")
     if md:
         # map.md・log.md は、見出し・箇条書き・表などに組んで象牙の紙に載せる（2026-10-22 かしぇ「mdはちゃんとプレビューするようにしたい」）。
@@ -376,7 +370,7 @@ def make_handler(root: Path, runs: list[dict], token: str):
                     host in (f"127.0.0.1:{self.server.server_port}", f"localhost:{self.server.server_port}")
                     or host.partition(":")[0].endswith(".ts.net")
                     or host in extra_hosts or host.partition(":")[0] in extra_hosts)):
-                return self.reply(403, "text/plain; charset=utf-8", "許可されていない Host".encode())
+                return self.reply(403, "text/plain; charset=utf-8", "Host not allowed".encode())
             path, _, query = self.path.partition("?")
             # 日本語名も一覧と照合できるよう復号する。復号した文字列からファイルを開かない（2026-10-22 脆弱性レビュー）
             path = unquote(path)
@@ -397,7 +391,7 @@ def make_handler(root: Path, runs: list[dict], token: str):
             if token and not any(secrets.compare_digest(token.encode("utf-8", errors="surrogateescape"),
                                                        s.encode("utf-8", errors="surrogateescape"))
                                  for s in (given, cookie.get("imozuru", ""))):
-                return self.reply(403, "text/plain; charset=utf-8", "合言葉が要る（起動したときに出た URL で開く）".encode())
+                return self.reply(403, "text/plain; charset=utf-8", "A passphrase is required; use the URL shown at startup.".encode())
             if path == "/manifest.webmanifest":
                 return self.reply(200, "application/manifest+json", json.dumps(manifest(token), ensure_ascii=False).encode())
             topics = collect(root, runs)
@@ -409,7 +403,7 @@ def make_handler(root: Path, runs: list[dict], token: str):
                 docs = {(t["slug"], n): root / t["slug"] / n for t in topics for n, _ in t["docs"]}
                 src = docs.get((slug, name))
                 if src is None or not topic_file(src):
-                    return self.reply(404, "text/plain; charset=utf-8", "無い".encode())
+                    return self.reply(404, "text/plain; charset=utf-8", "Not found".encode())
                 q = parse_qs(query)
                 body = with_back(name, src.read_bytes(), slug, hud="embed" not in q, print_now="print" in q)
                 ctype = "text/html; charset=utf-8"
@@ -439,8 +433,8 @@ def manifest(token: str) -> dict:
     id は合言葉を含まない / にして、合言葉を変えても同じアプリとして扱われるようにする。
     theme_color は置かない。iPhone で見た目の指定を足したとき、ホーム画面から開くと下に帯が出た（2026-10-22・render の注記）"""
     bg = palette.hex_of(palette.SWATCH[palette.DASH["side-bg"]])
-    return {"name": "imozuru 調査記録", "short_name": "imozuru", "id": "/", "start_url": f"/?k={token}" if token else "/",
-            "scope": "/", "display": "standalone", "lang": "ja", "background_color": bg,
+    return {"name": "imozuru Research Dashboard", "short_name": "imozuru", "id": "/", "start_url": f"/?k={token}" if token else "/",
+            "scope": "/", "display": "standalone", "lang": "en", "background_color": bg,
             "icons": [{"src": p, "sizes": f"{n}x{n}", "type": "image/png", "purpose": "any"}
                       for p, n in zip(APP_ICONS, (192, 512)) if APP_ICONS[p].is_file()]}
 
@@ -453,12 +447,12 @@ def serve(root: Path, runs: list[dict], port: int) -> int:
     token = os.environ.get("IMOZURU_SERVE_TOKEN")
     # 固定の短い鍵は総当たりできるので、生成する鍵と同様に十分な長さを求める（2026-10-22 脆弱性レビュー）
     if token is not None and len(token) < 16:
-        print("IMOZURU_SERVE_TOKEN は16文字以上にしてください", file=sys.stderr)
+        print("IMOZURU_SERVE_TOKEN must be at least 16 characters", file=sys.stderr)
         return 2
     token = token if token is not None else secrets.token_urlsafe(16)
     server = ThreadingHTTPServer(("127.0.0.1", port), make_handler(root, runs, token))
     print(f"→ http://127.0.0.1:{port}/?k={token}", flush=True)
-    print("この PC の中だけで開いている。スマホへは Tailscale serve で中継する（SKILL.md）。止めるときは Ctrl+C", flush=True)
+    print("Listening only on this PC. Relay with Tailscale Serve for phone access (see SKILL.md). Press Ctrl+C to stop.", flush=True)
     try:
         server.serve_forever()
     except KeyboardInterrupt:
@@ -490,12 +484,12 @@ def main() -> int:
         del args[i:i + 2]
     root = Path(args[0] if args else "~/research").expanduser()
     if not root.is_dir():
-        print(f"調査の置き場が無い: {root}", file=sys.stderr)
+        print(f"Research directory does not exist: {root}", file=sys.stderr)
         return 2
     topics = collect(root, load_runs(runs_path))
     for t in topics:
         if len(t["title"]) > TITLE_MAX:
-            print(f"題が長い（{len(t['title'])}字・{TITLE_MAX}字まで）: {t['slug']}/map.md「{t['title']}」", file=sys.stderr)
+            print(f"Title is too long ({len(t['title'])} characters; maximum {TITLE_MAX}): {t['slug']}/map.md: {t['title']}", file=sys.stderr)
     if "--dump" in args:
         for t in topics:
             print("\t".join(str(x) for x in (t["slug"], t["date"], t["rounds"], t["sources"], len(t["hosts"]),
@@ -506,7 +500,7 @@ def main() -> int:
         try:
             return write_bundle(topics, root, bundle)
         except (OSError, ValueError) as e:
-            print(f"束を書き出せない: {e}", file=sys.stderr)
+            print(f"Could not write bundle: {e}", file=sys.stderr)
             return 2
     if "--serve" in args:
         i = args.index("--serve")
@@ -522,7 +516,7 @@ def main() -> int:
     except BaseException:
         Path(tmp).unlink(missing_ok=True)
         raise
-    print(f"→ {out}（調査 {len(topics)}件）")
+    print(f"→ {out} ({len(topics)} research topics)")
     return 0
 
 
@@ -570,9 +564,9 @@ def imozuru_version() -> str:
     try:
         text = (LOGO.parents[3] / "CHANGELOG.md").read_text(encoding="utf-8")
     except OSError:
-        return "不明"
+        return "unknown"
     m = re.search(r"^## \[(\d+\.\d+\.\d+)\]", text, re.M)
-    return m.group(1) if m else "不明"
+    return m.group(1) if m else "unknown"
 
 
 # 感想・要望を送る先。作者の Google フォームの「事前入力したリンク」を、仮の値（種類=不具合・評価=5・内容=BODY・版=VERSION・環境=ENV）を
@@ -580,7 +574,7 @@ def imozuru_version() -> str:
 # 環境変数 IMOZURU_FEEDBACK_FORM で差し替えられ、off で消せる（フォークした人が自分のフォームへ向けるため）
 FEEDBACK_FORM = ("https://docs.google.com/forms/d/e/1FAIpQLScmjsJ363aHtpUVy6-cDxQ_OnwAcQE0hp7CjigMFG57c-OjJA/viewform?usp=pp_url"
                  "&entry.1218111923=%E4%B8%8D%E5%85%B7%E5%90%88&entry.860970375=5&entry.1447275214=BODY&entry.1226542421=VERSION&entry.1935341889=ENV")
-FEEDBACK_KINDS = ("不具合", "要望", "感想")
+FEEDBACK_KINDS = {"不具合": "Bug", "要望": "Request", "感想": "Comment"}
 
 
 def feedback_form() -> dict | None:
@@ -1272,16 +1266,16 @@ CSS = CSS.replace("@@PAPER@@", texture_url("paper"))
 # 文書の待ちと失敗の札の文（見出し・説明）。wait の見出しは文書の名前の後ろに付ける。
 # サーバーに届かないときに service worker が返す代わりの画面（offline_html）も、down・local・nonet の文をここから取る
 DOC_STATES = {
-    "wait": ["を読み込んでいます", ""],
-    "check": ["確かめています", "文書を開けなかったので、サーバーの様子を確かめています。"],
-    "slow": ["時間がかかっています", "PC のサーバーからの返事を待っています。止まっていないかも確かめています。"],
-    "alive": ["まだ読み込んでいます", "サーバーは動いています。大きな文書は時間がかかります。"],
-    "down": ["サーバーが止まっています", "PC には届きましたが、ダッシュボードのサーバー（dashboard.py --serve）が動いていません。起動してから、もう一度読み込んでください。"],
-    "local": ["サーバーが止まっています", "この PC のサーバー（dashboard.py --serve）が動いていません。起動してから、もう一度読み込んでください。"],
-    "nonet": ["PC に届きません", "PC が起動しているか、この端末から PC へつながっているか（Tailscale など）を確かめてから、もう一度読み込んでください。"],
-    "forbidden": ["合言葉を確かめられません", "起動したときに表示された、合言葉つきの URL で開き直してください。"],
-    "missing": ["この文書は見つかりません", "調査のフォルダから消えたか、名前が変わった可能性があります。ページを読み込み直すと、一覧が今の中身に変わります。"],
-    "other": ["文書を読み込めませんでした", "もう一度読み込んでください。"],
+    "wait": ["Loading", ""],
+    "check": ["Checking", "The document did not open, so the server is being checked."],
+    "slow": ["Taking longer than expected", "Waiting for the server on your PC and checking whether it is still running."],
+    "alive": ["Still loading", "The server is running. Large documents can take longer."],
+    "down": ["Server is stopped", "The PC is reachable, but dashboard.py --serve is not running. Start it and try again."],
+    "local": ["Server is stopped", "dashboard.py --serve is not running on this PC. Start it and try again."],
+    "nonet": ["PC is unreachable", "Check that the PC is on and this device can reach it through Tailscale or your relay, then try again."],
+    "forbidden": ["Passphrase could not be verified", "Reopen the passphrase URL shown when the server started."],
+    "missing": ["Document not found", "It may have been removed or renamed. Reload the dashboard to refresh the list."],
+    "other": ["Could not load document", "Try loading it again."],
 }
 
 
@@ -1357,7 +1351,7 @@ dwweb=location.protocol.indexOf('http')===0,dwprb=dwweb&&!!document.querySelecto
 dwloc=['127.0.0.1','localhost','[::1]'].indexOf(location.hostname)>=0,dwq=0,dwp=false,dwf=false,dwt1=0,dwt2=0,dwt3=0,dwlb='',
 DWM=@@DOC_STATES@@;
 function dwset(k){var x=DWM[k],busy=k==='wait'||k==='check'||k==='slow'||k==='alive';dwh.textContent=k==='wait'?dwlb+x[0]:x[0];dwl.textContent=x[1];
-dwb.hidden=!busy;dwa.hidden=k==='wait'||k==='check';dwr.textContent=k==='missing'?'ページを読み込み直す':'もう一度読み込む';dwr.setAttribute('data-k',k);dw.hidden=false}
+dwb.hidden=!busy;dwa.hidden=k==='wait'||k==='check';dwr.textContent=k==='missing'?'Reload dashboard':'Try again';dwr.setAttribute('data-k',k);dw.hidden=false}
 function dwstop(){clearTimeout(dwt1);clearTimeout(dwt2);clearTimeout(dwt3)}
 function dwfail(k){dwstop();dwf=true;dv.classList.remove('pend');dv.classList.add('fail');dwset(k)}
 // 問い合わせの答えを理由に直す。0 は届かなかった（つながらない・6秒で打ち切り）。
@@ -1369,7 +1363,7 @@ if(q!==dwq||mode!=='fail'&&(!dwp||dwf))return;
 var k=st===0?(dwloc?'local':'nonet'):st===403?'forbidden':st===404?'missing':st>=500?'down':mode==='fail'?'other':'alive';
 if(k!=='alive')dwfail(k);else if(mode==='slow')dwset(k)})}
 function dwgo(u,doc){var a=document.querySelector('a[data-doc="'+CSS.escape(doc)+'"]'),t=document.getElementById('t-'+doc.split('/')[0]),h=t&&t.querySelector('h2'),q=++dwq;
-dwlb=a?a.textContent:'文書';dwn.textContent=h?h.textContent:'';
+dwlb=a?a.textContent:'Document';dwn.textContent=h?h.textContent:'';
 dwstop();dwp=true;dwf=false;dw.hidden=true;dv.classList.remove('fail');dv.classList.add('pend');
 dwt1=setTimeout(function(){if(q===dwq&&dwp)dwset('wait')},800);
 dwt3=setTimeout(function(){if(q===dwq&&dwp&&dwprb)dwask(q,'manifest.webmanifest','quiet')},3000);
@@ -1712,15 +1706,15 @@ def offline_html() -> str:
            "font:600 .92rem/1 var(--head);letter-spacing:.06em;cursor:pointer;transition:transform .15s}"
            ".btn:active{transform:scale(.96)}.btn:focus-visible{outline:2px solid var(--beni);outline-offset:2px}"
            "@media (prefers-reduced-motion:reduce){.in{animation:none}.bar::before{animation:none;left:34%}.btn{transition:none}}")
-    return (f'<!doctype html>\n<html lang="ja"><head><meta charset="utf-8">'
+    return (f'<!doctype html>\n<html lang="en"><head><meta charset="utf-8">'
             f'<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">\n'
             f'<meta http-equiv="Content-Security-Policy" content="{csp}">\n'
-            f'<title>imozuru 調査記録</title>{skin.HEAD_META}'
+            f'<title>imozuru Research Dashboard</title>{skin.HEAD_META}'
             f'<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Serif+JP:wght@400;600&family={THEME["font"]}&display=swap">'
             f'<style>{css}</style></head>\n<body data-scope="@@SCOPE@@">'
-            '<div class="in" role="status"><p class="nm">imozuru 調査記録</p><h1>@@H@@</h1><p class="lead">@@LEAD@@</p>'
-            '<span class="bar" aria-hidden="true"></span><p class="poll">5秒ごとに確かめています。戻ったら自動で開きます。</p>'
-            '<div class="acts"><button class="btn" type="button">もう一度読み込む</button></div></div>'
+            '<div class="in" role="status"><p class="nm">imozuru Research Dashboard</p><h1>@@H@@</h1><p class="lead">@@LEAD@@</p>'
+            '<span class="bar" aria-hidden="true"></span><p class="poll">Checking every 5 seconds. The page will reopen automatically when the server returns.</p>'
+            '<div class="acts"><button class="btn" type="button">Try again</button></div></div>'
             f"<script>{OFFLINE_JS}</script></body></html>\n")
 
 
@@ -1757,7 +1751,7 @@ def bars(rows: list[tuple[str, int]], cls: str = "", head: str = "", unit: str =
     """横棒。共通の目盛り（最大値を全幅）で、値は棒の横に数字でも出す。
     colors を渡すと行ごとに標本の色（.rc1〜.rc4）で塗る＝一覧のチップと同じ色で対応させる。ラベルは必ず文字で出す"""
     if not rows:
-        return '<p class="note">記録なし</p>'
+        return '<p class="note">No record</p>'
     peak = max(v for _, v in rows) or 1
     body = "".join(
         f'<tr><td class="lbl">{esc(k)}</td><td class="bar {cls} {("rc%d" % colors[k]) if colors and k in colors else ""}"><span style="width:{v / peak * 100:.1f}%" '
@@ -1772,7 +1766,7 @@ def reason_cls(t: dict) -> str:
 
 
 def status_chip(status: str) -> str:
-    cls = {"根拠あり": "", "一部のみ": " part", "根拠なし": " no"}.get(status, " no")
+    cls = {"supported": "", "partially supported": " part", "unsupported": " no"}.get(status, " no")
     return f'<span class="st{cls}">{esc(status)}</span>'
 
 
@@ -1783,30 +1777,30 @@ def title_of(t: dict) -> str:
 
 def topic_html(t: dict) -> str:
     run = t["run"] or {}
-    rounds = "記録なし" if t["rounds"] is None else f"{t['rounds']} 周"
+    rounds = "No record" if t["rounds"] is None else f"{t['rounds']} rounds"
     # 台帳の値は、数えた値と食い違うときだけ短く添える（説明は #guide の節に置く）。
     # 台帳は「2周」「原文32本」のように単位つきで書かれることがあるので、最初の数どうしで比べる
     def differs(ledger: str, counted) -> bool:
         m = re.search(r"\d+", ledger)
         return not m or int(m.group()) != counted
     if run.get("周") and differs(run["周"], t["rounds"]):
-        rounds += f'<span class="note">（台帳 {esc(run["周"])}）</span>'
-    srcs = f"{t['sources']} 本"
+        rounds += f'<span class="note"> (ledger {esc(run["周"])})</span>'
+    srcs = f"{t['sources']}"
     if run.get("原文") and differs(run["原文"], t["sources"]):
-        srcs += f'<span class="note">（台帳 {esc(run["原文"])}）</span>'
-    facts = [("日付", esc(t["date"] or "記録なし")), ("周回数", rounds), ("原文", srcs),
-             ("終了理由", (f'<span class="chip {reason_cls(t)}">{esc(t["reason_class"])}</span> '
-                                    + esc(t["reason"])) if t["reason"] else "記録なし")]
+        srcs += f'<span class="note"> (ledger {esc(run["原文"])})</span>'
+    facts = [("Date", esc(t["date"] or "No record")), ("Rounds", rounds), ("Original sources", srcs),
+             ("Stop reason", (f'<span class="chip {reason_cls(t)}">{esc(t["reason_class"])}</span> '
+                                    + esc(t["reason"])) if t["reason"] else "No record")]
     # 台帳の列名は「感覚と合った？」のまま。画面では誰の答えかが分かる名前で出す（2026-10-22 かしぇ）
     if run.get("感覚と合った？"):
-        facts.append(("ユーザーの反応", esc(run["感覚と合った？"])))
+        facts.append(("User response", esc(run["感覚と合った？"])))
     if t["searches"] is not None:
-        line = f"検索 {t['searches']} 本・ヒット {t['hits']} 件"
+        line = f"Queries {t['searches']} · hits {t['hits']}"
         if t["fetch_ok"] is not None:
-            line += f"・保存 {t['fetch_ok']}・取得失敗 {t['fetch_ng']}"
-        facts.append(("検索と取得", line))
+            line += f" · saved {t['fetch_ok']} · failed {t['fetch_ng']}"
+        facts.append(("Search and fetch", line))
     else:
-        facts.append(("検索と取得", "記録なし"))
+        facts.append(("Search and fetch", "No record"))
     # 紙面の「← ホームへ」は置かない。ホームへはロゴで戻る（2026-10-22 かしぇ「ホームへ　のリンク廃止」）
     out = [f'<section class="topic {reason_cls(t)}" id="t-{esc(t["slug"])}">',
            f"<h2>{esc(title_of(t))}</h2>",
@@ -1815,15 +1809,15 @@ def topic_html(t: dict) -> str:
            f'<p class="note">{esc(t["slug"])}</p>',
            '<div class="card"><dl class="facts">' + "".join(f"<dt>{k}</dt><dd>{v}</dd>" for k, v in facts) + "</dl></div>"]
     if t["docs"]:
-        out.append('<div class="card"><h3>文書</h3><div class="docs">'
+        out.append('<div class="card"><h3>Documents</h3><div class="docs">'
                    # data-doc があれば、スクリプトがダッシュボードの本体の枠に開く。動かないときは href の別ページで開く
                    + "".join(f'<a href="{esc(t["slug"])}/{esc(name)}" data-doc="{esc(t["slug"])}/{esc(name)}">{esc(label)}</a>'
                              for name, label in t["docs"]) + "</div></div>")
     if t["claims"]:
-        out.append('<div class="card"><h3>調査の論点</h3><ul class="claims">'
+        out.append('<div class="card"><h3>Research points</h3><ul class="claims">'
                    + "".join(f"<li>{status_chip(s)}<span>{esc(c)}</span></li>" for c, s in t["claims"]) + "</ul></div>")
     if t["hosts"]:
-        out.append('<div class="card"><h3>取得元</h3><div class="hosts">'
+        out.append('<div class="card"><h3>Source hosts</h3><div class="hosts">'
                    + "".join(f"<span>{esc(h)}<b>{n}</b></span>" for h, n in Counter(t["hosts"]).most_common()) + "</div></div>")
     out.append("</section>")
     return "\n".join(out)
@@ -1840,19 +1834,19 @@ def topic_html(t: dict) -> str:
 # 画面名は、名前だけで何の画面かが分かる語にする（同「画面名は　自己紹介でなくてはならない」で紙面→トピック詳細）。
 # 部品は CSS のセレクタで、{dev} は端末（sp・pc）、{t} は撮るトピック詳細に置き換える
 GUIDE_SCREENS = [
-    ("home", "ホーム", [(".inst", "1", "アプリとして入れる。配信した画面（--serve）で開いたときに表示します", ""),
-                       (".fb", "2", "作者へ感想・要望を送る。送り先のフォームがあるときに表示します", ""), (".help", "3", "ヘルプを表示", ""),
-                       (".card.tally", "4", "全トピックの集計。下方に終了理由・原文の取得元・周回数の内訳が続きます", ""),
-                       (".menu", "A", "サイドバーを表示", "sp")]),
-    ("side", "サイドバー", [(".home-link", "5", "ロゴ。押すとホームへ移動します", ""), (".find", "6", "検索欄", ""),
-                           (".pager.{dev}", "7", "ページ送り", ""),
-                           ("aside li:first-child a", "8", "トピック1件。題名と日付。左端の色は終了理由の分類", ""),
-                           (".menu", "B", "サイドバーを閉じる", "sp"),
-                           (".grip", "A", "サイドバーの幅を調整するつまみ。押すと折り畳みます", "pc")]),
-    ("topic", "トピック詳細", [("{t} dl.facts", "9", "トピックの記録", ""), ("{t} .docs", "10", "文書。選択すると、この枠内に表示します", ""),
-                      ("{t} ul.claims", "11", "調査の論点と、原文の有無を示す印", "")]),
-    ("doc", "文書閲覧", [(".docview iframe", "12", "表示中の文書", ""), (".dochud", "13", "トピック詳細へ戻る", ""),
-                     (".docprint", "14", "この文書を PDF で保存（印刷）", "")]),
+    ("home", "Home", [(".inst", "1", "Install the served dashboard as an app", ""),
+                       (".fb", "2", "Send feedback to the author", ""), (".help", "3", "Open Help", ""),
+                       (".card.tally", "4", "Totals across all topics", ""),
+                       (".menu", "A", "Open the sidebar", "sp")]),
+    ("side", "Sidebar", [(".home-link", "5", "Logo; select it to go Home", ""), (".find", "6", "Search", ""),
+                           (".pager.{dev}", "7", "Page controls", ""),
+                           ("aside li:first-child a", "8", "One topic with title, date, and stop-reason color", ""),
+                           (".menu", "B", "Close the sidebar", "sp"),
+                           (".grip", "A", "Resize or collapse the sidebar", "pc")]),
+    ("topic", "Topic details", [("{t} dl.facts", "9", "Topic record", ""), ("{t} .docs", "10", "Documents", ""),
+                      ("{t} ul.claims", "11", "Research points and evidence status", "")]),
+    ("doc", "Document view", [(".docview iframe", "12", "Open document", ""), (".dochud", "13", "Back to topic details", ""),
+                     (".docprint", "14", "Save this document as PDF", "")]),
 ]
 
 
@@ -1870,17 +1864,17 @@ def shot_html(name: str, caption: str, legend: list[tuple[str, str, str, str]]) 
     items = "".join(f'<li><span class="n{"" if n.isdigit() else " only"}">{esc(n)}</span>{esc(t)}</li>' for _, n, t, _ in legend)
     # 題 → 図 → 番号の説明の順。何の画面かを先に読んでから図を見る（2026-10-22 かしぇ「ガメンタイトル→スクショ→解説がいいな」）
     return (f'<figure class="shot"><figcaption>{esc(caption)}</figcaption>'
-            f'<img src="{src}" alt="{esc(caption)}。番号の印は下の説明と対応しています" loading="lazy"><ol class="legend">{items}</ol></figure>')
+            f'<img src="{src}" alt="{esc(caption)}; numbered markers correspond to the notes below" loading="lazy"><ol class="legend">{items}</ol></figure>')
 
 
 # 分類の意味。画面には名前だけを出し、意味は説明のページに置く
 REASON_MEANING = {
-    "論点充足": "全論点に原文が付いて終了",
-    "一部充足": "一部の論点を残して終了",
-    "期限到達": "依頼の時間・回数の上限に到達して終了",
-    "取得不可": "残りの原文がログイン・有料・ボット対策の先にあり、取得できずに終了",
-    "情報飽和": "新規に挙がる人物・資料の大半が、既に地図に存在",
-    "周回上限": "4周追跡して終了",
+    "Complete": "Every research point has a source location",
+    "Partial": "Stopped with some research points still open",
+    "Limit reached": "Stopped at the user's time or round limit",
+    "Blocked": "Remaining sources require login, payment, or inaccessible bot checks",
+    "Saturated": "Most newly returned people and materials were already mapped",
+    "Round limit": "Stopped after four rounds",
 }
 
 
@@ -1901,105 +1895,60 @@ def sentence_lines(markup: str) -> str:
 
 
 def guide_html(topics: list[dict]) -> str:
-    """画面の説明（同じページの #guide の節）。数え方・分類の規則・操作をここに集め、ほかの画面には書かない。
-    別のファイルにするとページの読み込みで画面が一瞬白くなったので、同じページの中に置く（2026-10-21 かしぇ）。
-
-    上から読めば、この画面が何のためにあるかから分かるように、全体から詳細へ並べる
-    （2026-10-22 かしぇ「そもそもこのアプリはなんなのか　というところから」「ただし認知負荷は削減」）。
-    開いたまま読むのは、何の画面か・スキルのフロー・画面構成まで。操作・分類の表・集計方法は畳み、
-    要る人だけが開く（慣れた人には要らない説明を押しつけない・~/research/cognitive-load-dataviz）。
-    用語はスキルのフローの各段に「画面のどの項目に出るか」として添え、別の用語集は作らない（同じ説明を2か所に置かない）。
-    imozuru そのものの説明は置かない。この画面を開く人は imozuru を使っている（同日かしぇ「要らない」）。
-    文は「です・ます」で、和語に開いた言い方は熟語にする（同日かしぇ「日本語的に開かれた表現は積極的に熟語にする」）"""
+    """Return the in-page English guide for the dashboard."""
     n = len(topics)
-    with_reason = sum(1 for t in topics if t["reason_class"] != "記録欠落")
+    with_reason = sum(1 for t in topics if t["reason_class"] != "No record")
     with_hosts = sum(1 for t in topics if t["hosts"])
     with_rounds = sum(1 for t in topics if t["rounds"] is not None)
-    fetch_topics = [t for t in topics if t["fetch_ok"] is not None]
-    # 分類と状態は、画面に出ているのと同じ札（.chip・status_chip）で見せる。名前の文字だけだと、画面のどれのことか照らし合わせにくい
-    # （2026-10-22 かしぇ「表示してるコンポーネントつかったほうがわかりやすくていい」）
-    def reason_chip(label: str) -> str:
-        return f'<span class="chip {reason_cls({"reason_class": label})}">{esc(label)}</span>'
-    rules = "".join(f"<tr><td>{reason_chip(label)}</td><td>{esc(REASON_MEANING.get(label, ''))}</td><td>{esc('・'.join(words))}</td></tr>"
-                    for label, words in REASON_RULES)
-    rules += f"<tr><td>{reason_chip('記録欠落')}</td><td>台帳に記録が無い</td><td>—</td></tr>"
-    fetch = (f"取得の成否の記録は {len(fetch_topics)}件にあります。" if fetch_topics else "取得の成否の記録があるトピックはまだありません。")
-
-    # 画面構成は、図があれば図で見せる。図が無いときだけ文字の3行で書く。
-    # スマホとパソコンの図を1組ずつ畳みに入れる。両方とも開いた状態で書き、スクリプトが見ている端末の組だけを開いたまま残す
-    # （スクリプトが動かないときは両方開いたまま）。見ていない端末の図まで読ませない
-    shots_sp, shots_pc = ("".join(shot_html(f"guide-{dev}-{key}.webp", title, screen_parts(legend, dev)) for key, title, legend in GUIDE_SCREENS)
-                          for dev in ("sp", "pc"))
-    shots = "".join(f'<details class="more" data-dev="{dev}" open><summary>{label}</summary><div class="more-body">{html_}</div></details>'
-                    for dev, label, html_ in (("sp", "スマホの画面", shots_sp), ("pc", "パソコンの画面", shots_pc)) if html_)
-    parts = ('<ul class="parts"><li><b>ホーム</b>最初に表示される画面です。全トピックの集計として、終了理由・原文の取得元・周回数の内訳を並べます</li>'
-             '<li><b>サイドバー</b>トピックを新しい順に並べます。パソコンでは常に表示し、スマホでは左上のボタンで表示します。左端の色の帯は終了理由の分類です</li>'
-             '<li><b>トピック詳細</b>サイドバーで選択したトピックの記録と文書です</li></ul>')
 
     def more(summary: str, body: str) -> str:
         return f'<details class="more"><summary>{summary}</summary><div class="more-body">{body}</div></details>'
 
-    # 段は SKILL.md の「流れ」の 0〜4 と同じ番号と順にする。あとで SKILL.md を読む人が対応を取れるように
-    # （2026-10-22 かしぇ「調べものの流れ　←スキルのフロー　とか　がいいかも」）
-    flow = "".join(f"<li><div class=\"flow-step\">{esc(step)}。<span class=\"to\">{esc(item)}</span></div></li>" for step, item in (
-        ("調査する疑問と、回答に必要な論点を3〜6個決定します。論点は「定番の手法は何か」「どこで失敗するか」のように、疑問を分割した小さな設問です", "調査の論点"),
-        ("その分野の用語・人物・媒体を探索し、地図（map.md）に記録します。ここまでを0周目と呼びます", "文書の map.md"),
-        ("引用・リンク・著者を追跡して原文を保存し、地図に追記します。一巡を1周と数えます", "周回数・原文・取得元"),
-        ("各周の終了時に、継続か終了かを判断します。全論点に原文が付く、新規の資料が出現しなくなる、などの条件で終了します", "終了理由"),
-        ("原文の抜き書きと、解説付きの詳細レポートを作成して提出し、結果が感覚と合致したかを依頼者に確認します", "文書・ユーザーの反応")))
-    ops_sp = ("<li>サイドバーは、左上のボタンを押すか、本文を右へスワイプすると表示されます。左へスワイプするか、暗転した本文を押すと閉じます</li>"
-              "<li>サイドバー上部の検索欄は、題名・疑問・用語・人物・媒体を対象に検索します。ひらがなやローマ字でも一致します</li>"
-              "<li>サイドバーのページは、サイドバー表示中の右端の帯にある、× の下のボタンで送ります。サイドバーを上下にスワイプしても送れます（上へスワイプで次のページ）。番号を押すと直接入力できます</li>"
-              "<li>画面の最上部で下へ引くと、記録を再読み込みします</li>"
-              "<li>文書はトピック詳細の枠内に表示されます。左下のボタンでトピック詳細へ戻ります</li>")
-    ops_pc = ("<li>サイドバー右端のつまみをドラッグすると幅を調整でき、押すと折り畳みます</li>"
-              "<li>サイドバーのページは、サイドバー下端のボタンか、サイドバーの上でのホイール操作で送ります。番号を押すと直接入力できます</li>"
-              "<li>サイドバー上部のロゴを押すと、ホームへ移動します</li>"
-              "<li>配信した画面（<code>--serve</code>）を Chrome か Edge で開くと、右上の入れるボタンでアプリとして入れられます。タスクバーやスタートメニューから、ブラウザを開かずに起動できます</li>")
-    # 両方の端末に共通の操作（2026-10-25 かしぇ「pdf出力」「フィードバック、レビュー送るモーダル」）
-    ops_both = ("<li>文書の表示中は、左下の2つ目のボタンで、その文書を PDF で保存（印刷）できます。根拠の引用は開いた状態で印刷されます</li>"
-                + ("<li>右上の吹き出しのボタンから、作者へ感想・要望を送れます。送るのは書いた内容とバージョン・ブラウザの種類だけです</li>" if feedback_form() else ""))
-    ops_sp += ops_both
-    ops_pc += ops_both
-    phone = ("<ol><li>PC で <code>dashboard.py --serve</code> を実行します。合言葉付きの URL が表示されます</li>"
-             "<li>PC とスマホに Tailscale（自分の機器同士だけを接続する VPN）を導入して同じアカウントで接続し、PC で <code>tailscale serve --bg 8765</code> を実行します</li>"
-             "<li>スマホで <code>https://&lt;PC の名前&gt;.&lt;tailnet&gt;.ts.net/?k=&lt;合言葉&gt;</code> を開きます</li>"
-             "<li>右上の入れるボタン（下向きの矢印）を押し、表示された手順でホーム画面に追加すると、ロゴのアイコンから起動できます</li></ol>"
-             "<p>配信用の窓口は PC 内部（127.0.0.1）でのみ待ち受け、Tailscale が自分の機器にだけ中継します。"
-             "合言葉は <code>IMOZURU_SERVE_TOKEN</code> で固定できます。固定しないと起動ごとに変化し、ホーム画面のアイコンから開けなくなります。</p>")
-    claims = '<ul class="claims">' + "".join(f"<li>{status_chip(st)}<span>{esc(text)}</span></li>" for st, text in (
-        ("根拠あり", "論点に原文の場所が付いています。"), ("一部のみ", "論点の一部にのみ原文が付いています。"),
-        ("根拠なし", "探索したものの、原文が付いていません。"), ("未確認", "抜き書きが未作成のトピックで、地図の論点にまだ印がありません。"))) + "</ul>"
-    counts = (f"<ul><li>トピック: 調査の保存先（既定 <code>~/research</code>）直下のフォルダ1つを1件と数えます</li>"
-              f"<li>原文: <code>sources/</code> のファイルを、拡張子を除いた名前で集計します（PDF とその文字起こしは1本）</li>"
-              f"<li>周回数: <code>log.md</code> の「N周目」の見出しと検索の記録から集計します。0周目（地図作成）は含みません。{n}件中 {with_rounds}件に記録があります</li>"
-              f"<li>取得元: <code>map.md</code> の原文の表の URL を、媒体ごとに集計します。ホームには上位{SHOWN_HOSTS}件を表示します。{n}件中 {with_hosts}件に記録があります</li>"
-              f"<li>検索と取得: <code>queries.jsonl</code> と <code>fetch-log.jsonl</code> から集計します。{fetch}</li>"
-              f"<li>終了理由・ユーザーの反応: 台帳（<code>--runs</code> で指定する <code>evals/runs.md</code>）から読み取ります。台帳に無いトピックは「記録欠落」「記録なし」となります。{n}件中 {with_reason}件に記録があります</li>"
-              "<li>台帳記載の周回数・原文数が集計値と異なる場合のみ、括弧で台帳の値を併記します</li>"
-              "<li>「記録なし」は、0 と区別するための表示です</li></ul>")
-    return sentence_lines(f"""<h2><span lang="en">imozuru</span> 調査記録とは</h2>
-<p class="lead">imozuru で行った調査を、トピックごとに並べたダッシュボードです。トピックは1つの疑問について調べたひとまとまりのことを指します。過去のトピックとその文書を探し出し、それぞれがどこまで進んでどう終わったかを見比べられます。</p>
-<div class="card"><h3>スキルのフロー</h3>
-<p>imozuru は1つのトピックを、次の段の順に進めます。各段の下の名前は、その結果が出る画面の項目です。</p>
-<ol class="flow" start="0">{flow}</ol></div>
-<div class="card"><h3>画面構成</h3>
-{shots or parts}
-{more("スマホでの操作", f"<ul>{ops_sp}</ul>")}
-{more("パソコンでの操作", f"<ul>{ops_pc}</ul>")}</div>
-<div class="card"><h3>スマホでの閲覧</h3>
-<p>PC で配信した画面を、スマホのブラウザで閲覧できます。</p>
-{more("手順", phone)}</div>
-<div class="card"><h3>分類と状態</h3>
-{more("終了理由の分類", f'<p>imozuru はトピックごとに、終了理由などを台帳（<code>evals/runs.md</code>）へ1行記録します。その「調査を区切った理由」の文に「判定語」のいずれかが含まれれば、その分類とします。上の行ほど優先して判定します。元の文は各トピック詳細に掲載しています。</p><div class="tablewrap"><table><thead><tr><th>分類</th><th>意味</th><th>判定語</th></tr></thead><tbody>{rules}</tbody></table></div>')}
-{more("調査の論点の状態", "<p>トピック詳細の「調査の論点」で、各論点の先頭に付く印です。</p>" + claims)}</div>
-<div class="card"><h3>集計方法</h3>
-<p>数値はすべて、各トピックのフォルダの記録から機械的に集計しています。</p>
-{more("項目別の集計方法", counts)}</div>""")
-
-
+    rules = "".join(
+        f'<tr><td><span class="chip {reason_cls({"reason_class": label})}">{esc(label)}</span></td>'
+        f'<td>{esc(REASON_MEANING.get(label, ""))}</td><td>{esc(", ".join(words))}</td></tr>'
+        for label, words in REASON_RULES
+    )
+    rules += '<tr><td><span class="chip none">No record</span></td><td>No stop reason was recorded.</td><td>—</td></tr>'
+    flow = "".join(f"<li><div class=\"flow-step\">{esc(step)} <span class=\"to\">{esc(item)}</span></div></li>"
+                   for step, item in (
+                       ("Define the question and 3–6 research points.", "Research points"),
+                       ("Map the field's terms, people, and venues in round 0.", "map.md"),
+                       ("Follow citations, links, and authors; save original sources.", "Rounds, sources, and source hosts"),
+                       ("At each round end, decide whether to continue or stop.", "Stop reason"),
+                       ("Build verified extracts and a detailed report.", "Documents"),
+                   ))
+    claims = '<ul class="claims">' + "".join(
+        f"<li>{status_chip(st)}<span>{esc(text)}</span></li>" for st, text in (
+            ("supported", "A source location covers the point."),
+            ("partially supported", "Sources cover only part of the point."),
+            ("unsupported", "No source location was found."),
+            ("unverified", "The map point has not yet been marked complete."),
+        )) + "</ul>"
+    counts = (
+        f"<ul><li>Topics: one direct child directory of the research root counts as one topic.</li>"
+        f"<li>Sources: files in <code>sources/</code> are grouped by filename stem, so a PDF and its text count once.</li>"
+        f"<li>Rounds: counted from log headings and query records; round 0 is excluded. Records exist for {with_rounds} of {n} topics.</li>"
+        f"<li>Source hosts: counted from source-table URLs. Records exist for {with_hosts} of {n} topics.</li>"
+        f"<li>Stop reasons: read from the optional run ledger or generated documents. Records exist for {with_reason} of {n} topics.</li>"
+        "<li>“No record” is distinct from zero.</li></ul>"
+    )
+    return f"""<h2>About the <span lang="en">imozuru</span> Research Dashboard</h2>
+<p class="lead">This dashboard groups each research question and its documents into a topic so you can compare progress and stop reasons.</p>
+<div class="card"><h3>Skill flow</h3><ol class="flow" start="0">{flow}</ol></div>
+<div class="card"><h3>Using the dashboard</h3>
+<ul class="parts"><li><b>Home</b> summarizes topics, original sources, stop reasons, source hosts, and rounds.</li>
+<li><b>Sidebar</b> searches topic titles, questions, terms, people, and venues.</li>
+<li><b>Topic details</b> show records, research points, and generated documents.</li></ul>
+{more("Phone controls", "<ul><li>Use the top-left button or swipe right to open the sidebar; swipe left or tap the shade to close it.</li><li>Pull down at the top to refresh.</li><li>Use the document buttons to return or save as PDF.</li></ul>")}
+{more("Desktop controls", "<ul><li>Drag the sidebar grip to resize it or click the grip to collapse it.</li><li>Use the logo to return Home and the pager to move through topics.</li><li>When served, use the install button to install the dashboard as an app.</li></ul>")}</div>
+<div class="card"><h3>Phone access</h3><p>Run <code>dashboard.py --serve</code>, relay the local port with Tailscale Serve, and open the passphrase URL on your phone. Set a stable <code>IMOZURU_SERVE_TOKEN</code> of at least 16 characters before installing the app.</p></div>
+<div class="card"><h3>Classification and status</h3>
+{more("Stop-reason classification", f'<div class="tablewrap"><table><thead><tr><th>Class</th><th>Meaning</th><th>Matched terms</th></tr></thead><tbody>{rules}</tbody></table></div>')}
+{more("Research-point status", claims)}</div>
+<div class="card"><h3>Counting</h3>{more("How values are counted", counts)}</div>"""
 def home_html(topics: list[dict]) -> str:
-    reasons = Counter(t["reason_class"] for t in topics if t["reason_class"] != "記録欠落").most_common()
+    reasons = Counter(t["reason_class"] for t in topics if t["reason_class"] != "No record").most_common()
     hosts = Counter(h for t in topics for h in t["hosts"])
     by_date = [t for t in topics if t["rounds"] is not None]
     # 見出しは短い熟語にする（2026-10-21 かしぇ「画面に出すタイトルとしては冗長」）。
@@ -2010,20 +1959,20 @@ def home_html(topics: list[dict]) -> str:
     out = ['<section class="home">',
            # 札の頭に画面の名前を置く。ロゴは一覧の上にしかなく、スマホでは一覧を開くまで何の画面か分からない
            # （2026-10-22 かしぇ「この画面が何であるかを知らせるため」）
-           '<div class="card tally"><h1 class="plate-name"><span lang="en">imozuru</span> 調査記録</h1>'
-           f'<dl><div><dt>トピック</dt><dd><b>{len(topics)}</b>件</dd></div>'
-           f'<div><dt>原文</dt><dd><b>{total_sources}</b>本</dd></div></dl></div>',
-           '<div class="card"><h3>終了理由</h3>',
-           bars(reasons, head="分類", unit="件", colors=REASON_COLOR), "</div>",
-           '<div class="card"><h3>取得元</h3>',
-           bars(hosts.most_common(SHOWN_HOSTS), cls="src", head="媒体", unit="本")]
+           '<div class="card tally"><h1 class="plate-name"><span lang="en">imozuru</span> Research Dashboard</h1>'
+           f'<dl><div><dt>Topics</dt><dd><b>{len(topics)}</b></dd></div>'
+           f'<div><dt>Original sources</dt><dd><b>{total_sources}</b></dd></div></dl></div>',
+           '<div class="card"><h3>Stop reasons</h3>',
+           bars(reasons, head="Class", unit="Topics", colors=REASON_COLOR), "</div>",
+           '<div class="card"><h3>Source hosts</h3>',
+           bars(hosts.most_common(SHOWN_HOSTS), cls="src", head="Host", unit="Sources")]
     if len(hosts) > SHOWN_HOSTS:
-        out.append(f'<details class="more"><summary>ほか {len(hosts) - SHOWN_HOSTS} 媒体</summary><div class="more-body">'
-                   + bars(hosts.most_common()[SHOWN_HOSTS:], cls="src", head="媒体", unit="本") + "</div></details>")
+        out.append(f'<details class="more"><summary>{len(hosts) - SHOWN_HOSTS} more hosts</summary><div class="more-body">'
+                   + bars(hosts.most_common()[SHOWN_HOSTS:], cls="src", head="Host", unit="Sources") + "</div></details>")
     out.append("</div>")
-    out += ['<div class="card"><h3>周回数</h3>',
-            bars(sorted(Counter(f"{t['rounds']} 周" for t in by_date).items(), key=lambda kv: int(kv[0].split()[0])),
-                 head="周", unit="件"),
+    out += ['<div class="card"><h3>Rounds</h3>',
+            bars(sorted(Counter(f"{t['rounds']} rounds" for t in by_date).items(), key=lambda kv: int(kv[0].split()[0])),
+                 head="Rounds", unit="Topics"),
             "</div></section>"]
     return "\n".join(out)
 
@@ -2036,15 +1985,15 @@ def chevron(d: str) -> str:
 
 FIND_HTML = ('<label class="find"><svg class="lens" viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" fill="none" '
              'stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.5 4.5"/></svg>'
-             '<input type="search" id="find" placeholder="トピック・用語・人・媒体" aria-label="サイドバーを検索" autocomplete="off" '
+             '<input type="search" id="find" placeholder="Topics, terms, people, venues" aria-label="Search sidebar" autocomplete="off" '
              'enterkeyhint="search" spellcheck="false">'
-             f'<button type="button" class="clear" aria-label="検索語を消す">{chevron("M7 7l10 10M17 7L7 17")}</button></label>')
+             f'<button type="button" class="clear" aria-label="Clear search">{chevron("M7 7l10 10M17 7L7 17")}</button></label>')
 
 
 # 0件のとき。無かったことと打った語をはっきり出し、次の一手（語を消す）を添える。どこを探したかも書く
 # （NN/g 2014「Clearly explain that there are no matching results」・ビービット 2007「次にどういうアクションを取ればよいか」）
-FIND_NONE = ('<div class="find-none" hidden><p>「<b class="nq"></b>」に当てはまるトピックはない</p>'
-             '<p class="where">題名・疑問・読み・用語・人・媒体から探した</p><button type="button">検索語を消す</button></div>')
+FIND_NONE = ('<div class="find-none" hidden><p>No topics match “<b class="nq"></b>”</p>'
+             '<p class="where">Searched titles, questions, readings, terms, people, and venues</p><button type="button">Clear search</button></div>')
 
 
 def pager_html(kind: str) -> str:
@@ -2052,54 +2001,51 @@ def pager_html(kind: str) -> str:
     × の下へ縦に並べる（2026-10-22 かしぇ）。番号は押すと打ち込める。中身はスクリプトが入れる"""
     prev, nxt = ("M15 6l-6 6 6 6", "M9 6l6 6-6 6") if kind == "pc" else ("M6 15l6-6 6 6", "M6 9l6 6 6-6")
     sep = '<span class="t">/ <span class="pg-t">1</span></span>' if kind == "pc" else '<span class="rule"></span><span class="t pg-t">1</span>'
-    return (f'<nav class="pager {kind}" aria-label="サイドバーのページ"><button type="button" data-step="-1" aria-label="前のページ">{chevron(prev)}</button>'
-            '<input class="pg-n" type="text" inputmode="numeric" aria-label="ページ番号" value="1" autocomplete="off">'
-            f'{sep}<button type="button" data-step="1" aria-label="次のページ">{chevron(nxt)}</button></nav>')
+    return (f'<nav class="pager {kind}" aria-label="Sidebar pages"><button type="button" data-step="-1" aria-label="Previous page">{chevron(prev)}</button>'
+            '<input class="pg-n" type="text" inputmode="numeric" aria-label="Page number" value="1" autocomplete="off">'
+            f'{sep}<button type="button" data-step="1" aria-label="Next page">{chevron(nxt)}</button></nav>')
 
 
 def install_html() -> str:
-    """アプリとして入れる帯と、入れ方の手順の小窓。どちらもスクリプトが窓口で開いたときだけ出す（hidden で書いておく）。
-    手順はブラウザごとに書き、スクリプトが見ている端末の組だけを残す。Chrome と Edge の項目の名前は版で変わるので、名前は書きすぎない"""
+    """Return the install banner and browser-specific instructions."""
     steps = {
-        "ios": "<ol class=\"how\"><li>Safari の共有ボタン（四角から上向きの矢印）を押します</li><li>「ホーム画面に追加」を選び、「追加」を押します</li></ol>",
-        "android": "<ol class=\"how\"><li>Chrome の右上のメニュー（︙）を押します</li><li>「アプリをインストール」か「ホーム画面に追加」を選びます</li></ol>",
-        "chromium": ("<ol class=\"how\"><li>アドレスバーの右端にあるインストールのアイコンを押すか、ブラウザのメニューからアプリのインストールの項目を選びます</li>"
-                     "<li>見当たらない場合は、30秒ほどこの画面を操作してから、もう一度右上の入れるボタンを押します</li></ol>"),
-        "safari": "<ol class=\"how\"><li>メニューバーの「ファイル」を開きます</li><li>「Dock に追加」を選びます</li></ol>",
-        "firefox": "<p>Firefox はアプリとしての追加に対応していません。Chrome か Edge でこの画面を開くと入れられます。</p>",
+        "ios": '<ol class="how"><li>Tap Safari’s Share button.</li><li>Choose “Add to Home Screen”, then tap Add.</li></ol>',
+        "android": '<ol class="how"><li>Open Chrome’s menu.</li><li>Choose “Install app” or “Add to Home screen”.</li></ol>',
+        "chromium": '<ol class="how"><li>Use the install icon in the address bar or the browser menu.</li><li>If it is absent, use the dashboard for about 30 seconds and try the install button again.</li></ol>',
+        "safari": '<ol class="how"><li>Open File in the menu bar.</li><li>Choose “Add to Dock”.</li></ol>',
+        "firefox": '<p>Firefox does not support installing this dashboard as an app. Open it in Chrome or Edge instead.</p>',
     }
     plats = "".join(f'<div data-plat="{k}">{v}</div>' for k, v in steps.items())
     return (f'<section class="inst-bar" id="inst-bar" aria-labelledby="inst-h" hidden><span class="ic">{INSTALL_ICON}</span>'
-            '<div class="tx"><h2 id="inst-h">アプリとして入れる</h2><p>アイコンから、ブラウザを開かずに起動できます</p></div>'
-            f'<button class="btn pri go" type="button">入れる</button><button class="x" type="button" aria-label="この案内を閉じる">{CLOSE_ICON}</button></section>'
-            '<dialog class="dlg" id="inst-dlg" aria-labelledby="inst-dh"><div class="in"><h2 id="inst-dh">アプリとして入れる</h2>'
-            '<p class="lead">入れると、ホーム画面やタスクバーのアイコンから、この調査記録をすぐに開けます。合言葉の入力は要りません。</p>'
-            f'{plats}<div class="acts"><button class="btn" type="button" data-close>閉じる</button></div>'
-            f'<button class="x" type="button" aria-label="閉じる" data-close>{CLOSE_ICON}</button></div></dialog>')
+            '<div class="tx"><h2 id="inst-h">Install as an app</h2><p>Open the dashboard from an icon without first opening the browser.</p></div>'
+            f'<button class="btn pri go" type="button">Install</button><button class="x" type="button" aria-label="Dismiss this notice">{CLOSE_ICON}</button></section>'
+            '<dialog class="dlg" id="inst-dlg" aria-labelledby="inst-dh"><div class="in"><h2 id="inst-dh">Install as an app</h2>'
+            '<p class="lead">Open this research dashboard from a home-screen or taskbar icon without re-entering the passphrase.</p>'
+            f'{plats}<div class="acts"><button class="btn" type="button" data-close>Close</button></div>'
+            f'<button class="x" type="button" aria-label="Close" data-close>{CLOSE_ICON}</button></div></dialog>')
 
 
 def feedback_html(form: dict) -> str:
-    """感想・要望を送る小窓。フォームの送り先へ別のタブで直接送る（このページの CSP の form-action で、送り先をそのフォームだけに絞る）。
-    送るものを小窓の中に書いておく。調査の題や中身、ページの URL は送らない"""
-    kinds = "".join(f'<label><input type="radio" name="{form["kind"]}" value="{k}" required><span>{k}</span></label>' for k in FEEDBACK_KINDS)
-    rating = ("<fieldset><legend>評価<small>任意・5 が最高</small></legend><div class=\"chips\">"
+    """Return the feedback dialog without exposing topic content or URLs."""
+    kinds = "".join(f'<label><input type="radio" name="{form["kind"]}" value="{k}" required><span>{label}</span></label>'
+                    for k, label in FEEDBACK_KINDS.items())
+    rating = ('<fieldset><legend>Rating<small>Optional; 5 is best</small></legend><div class="chips">'
               + "".join(f'<label><input type="radio" name="{form["rating"]}" value="{n}"><span>{n}</span></label>' for n in range(1, 6))
               + "</div></fieldset>") if "rating" in form else ""
     version = imozuru_version()
     hidden = (f'<input type="hidden" name="{form["version"]}" value="{esc(version)}">' if "version" in form else "") + \
              (f'<input type="hidden" name="{form["env"]}" value="" data-env>' if "env" in form else "")
-    return ('<dialog class="dlg" id="fb-dlg" aria-labelledby="fb-h"><div class="in"><h2 id="fb-h">感想・要望を送る</h2>'
-            '<p class="lead">imozuru の作者に届きます。不具合の報告、ほしい機能、使ってみた感想をお寄せください。</p>'
+    return ('<dialog class="dlg" id="fb-dlg" aria-labelledby="fb-h"><div class="in"><h2 id="fb-h">Send feedback</h2>'
+            '<p class="lead">Send the author a bug report, request, or comment.</p>'
             f'<form method="post" action="{esc(form["action"])}" target="_blank" rel="noopener noreferrer">'
-            f'<fieldset><legend>種類</legend><div class="chips">{kinds}</div></fieldset>{rating}'
-            '<label class="lbl" for="fb-body">内容</label><textarea id="fb-body" name="' + form["body"] + '" required maxlength="4000"></textarea>'
-            f'{hidden}<p class="what">送るのは、ここに書いた内容と、imozuru のバージョン（{esc(version)}）・ブラウザの種類だけです。調査の題や中身は送りません。'
-            '送ると、Google フォームの受付画面が別のタブで開きます。</p>'
-            '<div class="acts"><button class="btn" type="button" data-close>取消</button><button class="btn pri" type="submit">送る</button></div></form>'
-            '<div class="done" role="status"><p>受付の画面を別のタブで開きました。そこに「回答を記録しました」と出ていれば届いています。ありがとうございます。</p>'
-            '<div class="acts"><button class="btn pri" type="button" data-close>閉じる</button></div></div>'
-            f'<button class="x" type="button" aria-label="閉じる" data-close>{CLOSE_ICON}</button></div></dialog>')
-
+            f'<fieldset><legend>Type</legend><div class="chips">{kinds}</div></fieldset>{rating}'
+            '<label class="lbl" for="fb-body">Message</label><textarea id="fb-body" name="' + form["body"] + '" required maxlength="4000"></textarea>'
+            f'{hidden}<p class="what">Only this message, the imozuru version ({esc(version)}), and browser type are sent. '
+            'Topic titles, research content, and the page URL are not sent. Google Forms opens in a new tab.</p>'
+            '<div class="acts"><button class="btn" type="button" data-close>Cancel</button><button class="btn pri" type="submit">Send</button></div></form>'
+            '<div class="done" role="status"><p>The response page opened in a new tab. If it says the response was recorded, it was delivered. Thank you.</p>'
+            '<div class="acts"><button class="btn pri" type="button" data-close>Close</button></div></div>'
+            f'<button class="x" type="button" aria-label="Close" data-close>{CLOSE_ICON}</button></div></dialog>')
 
 def render(topics: list[dict], root: Path, served: bool = False) -> str:
     """served は窓口（--serve）から返すとき。アプリとして入れる指定（manifest）を付ける。ファイルに書き出すページは入れられないので付けない"""
@@ -2115,32 +2061,32 @@ def render(topics: list[dict], root: Path, served: bool = False) -> str:
         f'<li data-s="{esc(" ".join([t["slug"], title_of(t), t["question"], t["date"], t["reason_class"], *sorted(set(t["hosts"]))]))}" '
         f'data-w="{esc(json.dumps(t.get("words", []), ensure_ascii=False))}" data-r="{esc(t.get("reading", ""))}">'
         f'<a class="{reason_cls(t)}" href="#t-{esc(t["slug"])}"><span class="q">{esc(title_of(t))}</span>'
-        f'<span class="m">{esc(t["date"] or "日付なし")}<span class="chip {reason_cls(t)}">'
+        f'<span class="m">{esc(t["date"] or "No date")}<span class="chip {reason_cls(t)}">'
         f'{esc(t["reason_class"])}</span></span></a></li>' for t in topics)
     # 選んでいる調査を一覧で示す。開いている札（スクリプトが動くときは印 .on、動かないときは :target）を :has() で一覧へ伝える
     current = "".join(f'body:not(.js) .layout:has(#t-{t["slug"]}:target) aside a[href="#t-{t["slug"]}"],'
                       f'body.js .layout:has(#t-{t["slug"]}.on) aside a[data-href="#t-{t["slug"]}"]'
                       "{background:color-mix(in oklch,var(--glass) 9%,transparent)}" for t in topics if SLUG.fullmatch(t["slug"]))
-    body = [f'<header><button class="menu" type="button" aria-controls="side" aria-expanded="false" aria-label="サイドバー"><span></span></button>'
+    body = [f'<header><button class="menu" type="button" aria-controls="side" aria-expanded="false" aria-label="Sidebar"><span></span></button>'
             f'{pager_html("sp")}</header>',
             # 右上のボタンの列。入れるボタンはスクリプトが窓口で開いたときだけ出す。送るボタンは送り先のフォームがあるときだけ置く
             '<div class="tools">'
-            f'<button class="tbtn inst" id="inst" type="button" hidden aria-haspopup="dialog" aria-label="アプリとして入れる" data-tip="アプリとして入れる">{INSTALL_ICON}</button>'
-            + (f'<button class="tbtn fb" id="fb" type="button" aria-haspopup="dialog" aria-label="感想・要望を送る" data-tip="感想・要望を送る">{FEEDBACK_ICON}</button>' if form else "")
-            + f'<a class="tbtn help" href="#guide" aria-label="ヘルプ" data-tip="ヘルプ">{HELP_ICON}</a></div>',
+            f'<button class="tbtn inst" id="inst" type="button" hidden aria-haspopup="dialog" aria-label="Install as an app" data-tip="Install as an app">{INSTALL_ICON}</button>'
+            + (f'<button class="tbtn fb" id="fb" type="button" aria-haspopup="dialog" aria-label="Send feedback" data-tip="Send feedback">{FEEDBACK_ICON}</button>' if form else "")
+            + f'<a class="tbtn help" href="#guide" aria-label="Help" data-tip="Help">{HELP_ICON}</a></div>',
             # 文書を本体の枠に開いているときだけ出す戻るボタン。行き先（その文書の調査の札）はスクリプトが入れる
             # （2026-10-22 かしぇ「戻るHUDは要るね　そのレポートの所属する項目に戻りたい時が絶対ある」）
-            f'<a class="imz-hud dochud" href="#" aria-label="このトピックの記録へ戻る">{HUD_ICON}</a>',
-            f'<button class="imz-hud docprint" type="button" aria-label="この文書を PDF で保存（印刷）">{PRINT_ICON}</button>', PTR_ICON,
+            f'<a class="imz-hud dochud" href="#" aria-label="Back to this topic">{HUD_ICON}</a>',
+            f'<button class="imz-hud docprint" type="button" aria-label="Save this document as PDF (print)">{PRINT_ICON}</button>', PTR_ICON,
             '<div class="layout">',
             # ロゴの帯と一覧は .side-in で包む。スマホで開閉するとき、中身を1つの塊として奥へ下げ・手前へ出す
-            f'<div class="side" id="side"><div class="side-in"><div class="brand"><a class="home-link" href="#" aria-label="ホームへ">{logo}</a>{FIND_HTML}</div>'
+            f'<div class="side" id="side"><div class="side-in"><div class="brand"><a class="home-link" href="#" aria-label="Home">{logo}</a>{FIND_HTML}</div>'
             f'<aside><ol>{items}</ol>{FIND_NONE}<p class="sr" id="find-n" aria-live="polite"></p></aside></div>'
-            f'{pager_html("pc")}<button class="grip" type="button" aria-label="サイドバーを開く・閉じる（ドラッグでも動く）"></button></div>',
-            '<button class="shade" type="button" aria-label="サイドバーを閉じる" tabindex="-1"></button><div class="frame" aria-hidden="true"></div>',
+            f'{pager_html("pc")}<button class="grip" type="button" aria-label="Open or close sidebar; drag to resize"></button></div>',
+            '<button class="shade" type="button" aria-label="Close sidebar" tabindex="-1"></button><div class="frame" aria-hidden="true"></div>',
             '<main><div class="view">', home_html(topics), *[topic_html(t) for t in topics],
             f'<section class="topic guide" id="guide">{guide_html(topics)}</section>',
-            '<section class="docview" id="docview" aria-label="文書"><iframe title="文書"></iframe>'
+            '<section class="docview" id="docview" aria-label="Document"><iframe title="Document"></iframe>'
             # 文書の待ちと失敗の札。文と押せるものはスクリプトが入れ替える
             '<div class="docwait" id="docwait" hidden><div class="in" role="status"><p class="nm"></p><h2></h2><p class="lead"></p>'
             '<span class="bar" aria-hidden="true"></span><div class="acts" hidden><button class="btn pri" type="button"></button></div></div></div></section>',
@@ -2160,9 +2106,9 @@ def render(topics: list[dict], root: Path, served: bool = False) -> str:
     if served:
         icon_link += '<link rel="manifest" href="manifest.webmanifest" crossorigin="use-credentials">'
     return f"""<!doctype html>
-<html lang="ja"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta http-equiv="Content-Security-Policy" content="{csp}">
-<title>imozuru 調査記録</title>{skin.HEAD_META}{icon_link}
+<title>imozuru Research Dashboard</title>{skin.HEAD_META}{icon_link}
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=EB+Garamond:wght@400;500&family=Noto+Serif+JP:wght@400;600&family={THEME["font"]}&display=swap">
 <style>{CSS}{hud_css("dark")}:root{{--bar:{THEME["bar"]};--src:{THEME["src"]};--r1:{THEME["r1"]};--r2:{THEME["r2"]};--r3:{THEME["r3"]};--r4:{THEME["r4"]};--p-r1:{THEME["p-r1"]};--p-r2:{THEME["p-r2"]};--p-r3:{THEME["p-r3"]};--p-r4:{THEME["p-r4"]};--p-bar:{THEME["p-bar"]};--p-src:{THEME["p-src"]};--head:{THEME["head"]},"Hiragino Mincho ProN","Yu Mincho",serif}}{current}</style></head>
 <body>

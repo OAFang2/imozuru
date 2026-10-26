@@ -1,11 +1,4 @@
-"""imozuru が書き出す文書（抜き書き・詳細レポート・map.md と log.md の表示）の共通の見た目。
-
-履歴ダッシュボードに合わせて、コルク板の地に象牙の紙をピンで留め、その上に中身を載せる
-（2026-10-22 かしぇ「抜き書きと詳細レポートのフォーマットも　ダッシュボード側のデザインに合わせたい」）。
-紙は1つの話題ごとに1枚（.sheet）。色は palette.py の値だけを使い、質感は assets/ の PNG を埋め込む。
-md の表示（md_html）は、map.md・log.md を文字のまま見せていたのを、見出し・箇条書き・表などに組む
-（同日かしぇ「mdはちゃんとプレビューするようにしたい」）。
-"""
+"""Shared styling and safe Markdown rendering for imozuru documents."""
 
 import base64
 import html
@@ -48,12 +41,14 @@ HEAD_META = _head_meta()
 
 
 def lang_attr(text: str) -> str:
-    """原文の引用に付ける言語の名乗り。ページは lang="ja" なので、名乗らない英文は日本語の書体の選び方と
-    日本語の読み上げで扱われる。仮名も漢字も無くラテン文字のある文だけを en と名乗る。原文はほぼ英語か日本語で、
-    ほかの言語を見分ける判定は持たない（フランス語の原文も en と名乗る）"""
-    if re.search(r"[぀-ヿ㐀-鿿]", text) or not re.search(r"[A-Za-z]", text):
-        return ""
-    return ' lang="en"'
+    """Tag the primary quote languages for typography and screen readers."""
+    if re.search(r"[\u3040-\u30ff]", text):
+        return ' lang="ja"'
+    if re.search(r"[\u3400-\u9fff]", text):
+        return ' lang="zh-Hans"'
+    if re.search(r"[A-Za-z]", text):
+        return ' lang="en"'
+    return ""
 
 
 # 紙の上の役割は文書の明るい組（DOC_LIGHT）。コルクの上に直接置く字（ページの末尾）は on-cork
@@ -332,7 +327,7 @@ def page(title: str, body: str, extra_head: str = "", scripts: tuple[str, ...] =
     hashes = " ".join("'sha256-" + base64.b64encode(hashlib.sha256(s.encode()).digest()).decode() + "'" for s in js)
     csp = f"default-src 'none'; {CSP_FONTS}; script-src {hashes}"
     tags = "".join(f"<script>{s}</script>" for s in js)
-    return (f'<!doctype html>\n<html lang="ja"><head><meta charset="utf-8">'
+    return (f'<!doctype html>\n<html lang="en"><head><meta charset="utf-8">'
             f'<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">'
             f'<meta http-equiv="Content-Security-Policy" content="{csp}">{HEAD_META}'
             f"<title>{html.escape(title)}</title>{FONT_LINK}{extra_head}</head>\n<body><main>\n{body}\n</main>{tags}</body></html>\n")

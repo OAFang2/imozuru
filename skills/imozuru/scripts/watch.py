@@ -1,26 +1,10 @@
 #!/usr/bin/env python3
-"""地図の「場」を見張り、前回から新しく出たものを一覧にする（Ellis の monitoring）。
+"""Monitor mapped venues through RSS/Atom (Ellis's monitoring).
 
-検索ではなく RSS / Atom を引く。検索は結果が揺れて費用もかかるが、フィードは
-「その場所に新しく出たもの」をそのまま返す。決まった Qiita・Zenn・X を毎回検索する代わりに、
-掘って見つけた場所を見張るための道具。
-
-新着には要約をつけない。代わりにフィードに入っている原文の冒頭を1行そのまま載せる
-（エージェントの言葉を挟まずに、選ぶ手がかりだけ出す）。
-
-使い方:
-    watch.py add   <topic_dir> <url> [名前]   … 見張る先を足す（RSS の場所は自動で探す）
-    watch.py list  <topic_dir>               … 見張る先の一覧
+Usage:
+    watch.py add   <topic_dir> <url> [name]
+    watch.py list  <topic_dir>
     watch.py check <topic_dir> [--days N] [--fresh]
-                                             … 新着を出して watch/<日付-時刻>.md に残す
-                                               初回のフィードは直近 N 日（既定14）だけ
-                                               --fresh は見た記録を無視して窓だけで選び直す
-                                               新着の無い場所も、最新の1件を窓に関係なく出す
-
-置き場（<topic_dir> = ~/research/<話題>/）:
-    watch.tsv          種類・名前・フィードの URL・元の URL（タブ区切り）
-    watch-state.json   フィードごとに見たことのある記事の URL
-    watch/<日付>.md     check の結果
 """
 
 import codecs
@@ -89,24 +73,24 @@ def url_problem(url: str) -> str | None:
         p = urllib.parse.urlsplit(url)
         host = p.hostname
     except ValueError:
-        return "URL の形が壊れている"
+        return "malformed URL"
     if p.scheme.lower() not in {"http", "https"}:
-        return "http(s) の URL だけを取りに行く"
+        return "only http(s) URLs may be fetched"
     if not host:
-        return "URL にホストが無い"
+        return "URL has no host"
     if "@" in p.netloc or "%" in p.netloc:
-        return "URL のホストに「@」か「%」が入っている"
+        return "URL host contains @ or %"
     if os.environ.get("IMOZURU_ALLOW_PRIVATE") == "1":
         return None
     try:
         addrs = resolve(host)
     except (OSError, UnicodeError, ValueError) as e:
-        return f"ホストを引けない（{e}）"
+        return f"cannot resolve host ({e})"
     for addr in addrs:
         for ip in _addresses_inside(ipaddress.ip_address(addr.split("%", 1)[0])):  # IPv6 の %eth0 を外す
             if not ip.is_global:
-                return (f"手元や内側の宛先（{ip}）には取りに行かない"
-                        "（VPN などで外の名前も内側に引ける環境なら IMOZURU_ALLOW_PRIVATE=1 で外せる）")
+                return (f"refusing local or private address ({ip}); "
+                        "IMOZURU_ALLOW_PRIVATE=1 disables this check for VPN environments that resolve public names privately")
     return None
 
 
@@ -141,7 +125,7 @@ class _Redirect308(urllib.request.HTTPRedirectHandler):
         fp.close()
         problem = url_problem(newurl)
         if problem:
-            raise UnsafeURL(f"転送先 {newurl}: {problem}")
+            raise UnsafeURL(f"redirect target {newurl}: {problem}")
         return super().redirect_request(req, fp, 307 if code == 308 else code, msg, headers, newurl)
 
 
@@ -186,12 +170,12 @@ def _pinned_connection(host: str, port: int, timeout, source_address):
     try:
         addrs = list(resolve(host))
     except (OSError, UnicodeError, ValueError) as e:
-        raise UnsafeURL(f"ホストを引けない（{e}）")
+        raise UnsafeURL(f"cannot resolve host ({e})")
     if os.environ.get("IMOZURU_ALLOW_PRIVATE") != "1":
         for addr in addrs:
             for ip in _addresses_inside(ipaddress.ip_address(addr.split("%", 1)[0])):
                 if not ip.is_global:
-                    raise UnsafeURL(f"つなぐ直前に引いた先が手元や内側の宛先（{ip}）だった")
+                    raise UnsafeURL(f"destination resolved to a local or private address immediately before connection ({ip})")
     err = None
     full = _real_timeout(timeout)
     order = _connect_order(addrs)
@@ -218,7 +202,7 @@ def _pinned_connection(host: str, port: int, timeout, source_address):
             return _dial(addr, port, timeout, source_address)
         except OSError as e:
             err = e
-    raise err or OSError(f"{host} の宛先が無い")
+    raise err or OSError(f"no address found for {host}")
 
 
 class _PinnedMixin:
@@ -269,9 +253,9 @@ def fetch_final(url: str) -> tuple[bytes, str, str]:
     with _OPENER.open(req, timeout=60) as res:
         body = res.read(MAX_BYTES + 1)
         if len(body) > MAX_BYTES:
-            raise ValueError(f"本体が {MAX_BYTES:,} バイトを超える")
+            raise ValueError(f"body exceeds {MAX_BYTES:,} bytes")
         if isinstance(res.length, int) and res.length > 0:  # read(n) は途中で切れても例外を出さない
-            raise ValueError("本体が途中で切れた")
+            raise ValueError("body was truncated")
         # DeepMind のブログは頼まなくても gzip で返す
         if res.headers.get("Content-Encoding", "").strip().lower() in {"gzip", "x-gzip"}:
             body = gunzip(body)
@@ -289,9 +273,9 @@ def gunzip(data: bytes) -> bytes:
         inflater = zlib.decompressobj(16 + zlib.MAX_WBITS)
         out += inflater.decompress(data, MAX_BYTES + 1 - len(out))
         if len(out) > MAX_BYTES or inflater.unconsumed_tail:
-            raise ValueError(f"展開した本体が {MAX_BYTES:,} バイトを超える")
+            raise ValueError(f"decompressed body exceeds {MAX_BYTES:,} bytes")
         if not inflater.eof:
-            raise ValueError("gzip が途中で切れた")
+            raise ValueError("gzip stream was truncated")
         data = inflater.unused_data.lstrip(b"\0")  # 後ろの0の詰め物は、標準の gzip と同じく読み飛ばす
     return out
 
@@ -343,7 +327,7 @@ def discover(url: str) -> tuple[str, str]:
                 feed = urllib.parse.urljoin(final, html.unescape(href.group(1)).strip())
                 kind = "youtube" if "youtube.com/feeds" in feed else "site"
                 return kind, feed
-    raise SystemExit(f"RSS が見つからない: {url}（ページに RSS の案内が無い。X・pixiv はそもそも出していない）")
+    raise SystemExit(f"No RSS feed found: {url} (the page advertises none; X and pixiv do not provide feeds)")
 
 
 def plain(s: str | None) -> str:
@@ -415,7 +399,7 @@ def reject_doctype(feed_bytes: bytes) -> None:
     try:
         parser.Parse(feed_bytes, True)
     except _Doctype:
-        raise ValueError("DOCTYPE か ENTITY を含むフィードは読まない") from None
+        raise ValueError("feeds containing DOCTYPE or ENTITY are not accepted") from None
     except expat.ExpatError:
         pass  # 壊れた XML は、このあとの ET.fromstring が同じく ParseError にする
 
@@ -480,14 +464,14 @@ def cmd_add(topic: Path, url: str, name: str | None) -> int:
         kind, feed = discover(url)
         found = items(fetch(feed)[0])  # 引けないフィードは足さない
     except SystemExit as e:
-        print(f"足せなかった: {clean(str(e))}")
+        print(f"Could not add feed: {clean(str(e))}")
         return 1
     except Exception as e:
-        print(f"足せなかった: {clean(url)}（{type(e).__name__}: {clean(str(e))}）")
+        print(f"Could not add feed: {clean(url)} ({type(e).__name__}: {clean(str(e))})")
         return 1
     for row in load_watch(topic):
         if row[2] == feed:
-            print(f"もう見張っている: {row[1]} {feed}")
+            print(f"Already watching: {row[1]} {feed}")
             return 0
     if name:
         label = name
@@ -501,16 +485,16 @@ def cmd_add(topic: Path, url: str, name: str | None) -> int:
         label = re.sub(r"^https?://(www\.)?", "", url).rstrip("/")[:40]
     # フィードの URL はページを書いた他人が決める。&#9; や &#10; で列や行を足されないよう、制御文字を断る
     if any(clean(s) != s for s in (feed, url)):
-        print(f"足せなかった: {clean(url)}（URL に空白・タブ・改行・制御文字が入っている）")
+        print(f"Could not add feed: {clean(url)} (URL contains whitespace or control characters)")
         return 1
     label = clean(label)
     topic.mkdir(parents=True, exist_ok=True)
     p = topic / "watch.tsv"
     if not p.exists():
-        p.write_text("# 種類\t名前\tフィード\t元の URL\n", encoding="utf-8")
+        p.write_text("# Type\tName\tFeed\tOriginal URL\n", encoding="utf-8")
     with p.open("a", encoding="utf-8") as f:
         f.write(f"{kind}\t{label}\t{feed}\t{url}\n")
-    print(f"足した: {kind}\t{label}\t{feed}（いま {len(found)} 件）")
+    print(f"Added: {kind}\t{label}\t{feed} ({len(found)} current items)")
     return 0
 
 
@@ -522,19 +506,19 @@ def cmd_check(topic: Path, days: int, fresh: bool) -> None:
     """
     rows = load_watch(topic)
     if not rows:
-        raise SystemExit(f"見張る先が無い: {topic}/watch.tsv（watch.py add で足す）")
+        raise SystemExit(f"No watched feeds: {topic}/watch.tsv (add one with watch.py add)")
     state_p = topic / "watch-state.json"
     state = json.loads(state_p.read_text(encoding="utf-8")) if state_p.exists() else {}
     now = dt.datetime.now(dt.timezone.utc)
     cutoff = now - dt.timedelta(days=days)
-    lines = [f"# 新着 {now.astimezone():%Y-%m-%d %H:%M}", ""]
+    lines = [f"# New items {now.astimezone():%Y-%m-%d %H:%M}", ""]
     quiet: list[str] = []
     total = 0
     for kind, label, feed, *_ in rows:
         try:
             got = items(fetch(feed)[0])
         except Exception as e:  # 1つのフィードが落ちても他は見る
-            lines += [f"## {md_text(label)}（{kind}）", f"- 取れなかった: {type(e).__name__}: {md_text(str(e))}", ""]
+            lines += [f"## {md_text(label)} ({kind})", f"- Could not fetch: {type(e).__name__}: {md_text(str(e))}", ""]
             continue
         seen = set() if fresh else set(state.get(feed, []))
         # 前回が空のフィード（記事0件）も初回と同じく窓で絞る。空の記録で全部を新着と取り違えない
@@ -549,23 +533,23 @@ def cmd_check(topic: Path, days: int, fresh: bool) -> None:
             dated = [i for i in got if i["date"]]
             if dated:
                 last = max(dated, key=lambda i: i["date"])
-                quiet.append(f"- {md_text(label)}（{kind}）最新 {last['date'].astimezone():%Y-%m-%d} "
+                quiet.append(f"- {md_text(label)} ({kind}) latest {last['date'].astimezone():%Y-%m-%d} "
                              f"[{md_text(last['title'])}]({md_link(last['link'])})")
             else:
-                quiet.append(f"- {md_text(label)}（{kind}）記事なし")
+                quiet.append(f"- {md_text(label)} ({kind}) no items")
             continue
         total += len(new)
-        lines.append(f"## {md_text(label)}（{kind}）{'・直近' + str(days) + '日' if first else ''}")
+        lines.append(f"## {md_text(label)} ({kind}){' · last ' + str(days) + ' days' if first else ''}")
         for i in new:
-            day = i["date"].astimezone().strftime("%Y-%m-%d") if i["date"] else "日付なし"
+            day = i["date"].astimezone().strftime("%Y-%m-%d") if i["date"] else "No date"
             lines.append(f"- {day} [{md_text(i['title'])}]({md_link(i['link'])})")
             if i["head"]:
                 lines.append(f"  > {md_text(i['head'][:HEAD_CHARS])}{'…' if len(i['head']) > HEAD_CHARS else ''}")
         lines.append("")
     if total == 0:
-        lines += ["新着なし", ""]
+        lines += ["No new items", ""]
     if quiet:
-        lines += ["## 新着の無かった場所（窓に関係なく最新の1件）", *quiet, ""]
+        lines += ["## Feeds without new items (latest item regardless of window)", *quiet, ""]
     # 秒まで入れる。日付だけだと同じ日の2回目が1回目を上書きして消した（2026-10-10 の試行）。
     out = topic / "watch" / f"{now.astimezone():%Y-%m-%d-%H%M%S}.md"
     n = 2
@@ -577,7 +561,7 @@ def cmd_check(topic: Path, days: int, fresh: bool) -> None:
     atomic_write(out, "\n".join(lines) + "\n")
     atomic_write(state_p, json.dumps(state, ensure_ascii=False, indent=1))
     print("\n".join(lines))
-    print(f"\n→ {out}（新着 {total} 件・見張る先 {len(rows)}）")
+    print(f"\n→ {out} ({total} new items across {len(rows)} feeds)")
 
 
 def main() -> int:
@@ -591,7 +575,7 @@ def main() -> int:
         value = args[i + 1] if i + 1 < len(args) else ""
         # isdigit() は「²」も数字と見なして int() で落ちるので、ASCII の数字だけを通す
         if not re.fullmatch(r"[0-9]+", value) or int(value) < 1:
-            print("--days には 1 以上の日数を書く", file=sys.stderr)
+            print("--days must be an integer of 1 or greater", file=sys.stderr)
             return 2
         days = int(value)
         del args[i:i + 2]

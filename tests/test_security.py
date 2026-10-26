@@ -153,7 +153,7 @@ class UnsafeUrlTests(unittest.TestCase):
                 contextlib.redirect_stdout(io.StringIO()) as out:
             self.assertEqual(fetch.fetch_source(Path(tmp), "paper", "http://127.0.0.1:9222/json", Path(tmp)), 1)
         download.assert_not_called()
-        self.assertIn("手元や内側の宛先", out.getvalue())
+        self.assertIn("refusing local or private address", out.getvalue())
 
     def test_redirect_into_private_address_is_refused(self):
         with patch.object(fetch, "resolve", public_localhost), patch.object(watch, "resolve", public_localhost):
@@ -211,7 +211,7 @@ class YoutubeHostTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp, patch.object(fetch, "run_tool", side_effect=yt_dlp):
             fetch.youtube_to_md("https://www.youtube.com/watch?v=a", Path(tmp) / "t.md")
-        self.assertEqual(asked[-1], "ja-orig,en-orig")
+        self.assertEqual(asked[-1], "en-orig,zh-orig")
 
 
 class DecodeTests(unittest.TestCase):
@@ -650,7 +650,7 @@ class DeepSeekSplitReviewTests(unittest.TestCase):
                 patch.object(sys, "argv", ["chain.py", "author", "Same Name"]), \
                 contextlib.redirect_stdout(io.StringIO()) as out:
             chain.main()
-        self.assertIn("# 別の候補 Same Name A2 Inst 2", out.getvalue())
+        self.assertIn("# Alternative candidate Same Name A2 Inst 2", out.getvalue())
         self.assertIn("chain.py author A2", out.getvalue())
 
         with patch.object(chain, "get", side_effect=get), \
@@ -670,7 +670,7 @@ class DeepSeekSplitReviewTests(unittest.TestCase):
                 patch.object(fetch, "resolve", lambda host: {PUBLIC_IP}), \
                 patch.object(sys, "argv", ["fetch.py", tmp, "paper", "https://example.test/x"]):
             self.assertEqual(fetch.main(), 1)
-        self.assertIn("壁に当たった（you're not a bot）", out.getvalue())
+        self.assertIn("access wall detected (you're not a bot)", out.getvalue())
 
 
 class TestConnectOrder(unittest.TestCase):
@@ -760,7 +760,7 @@ if __name__ == "__main__":
 
 
 class OcrLanguageTests(unittest.TestCase):
-    """#11: OCR が eng 固定で、日本語のスキャン PDF が意味のない英字の列のまま保存されうる。"""
+    """#11: OCR selects installed Chinese packs before optional Japanese packs."""
 
     @staticmethod
     def listing(*names, stream="stdout"):
@@ -774,8 +774,12 @@ class OcrLanguageTests(unittest.TestCase):
                 os.environ.pop("IMOZURU_OCR_LANG", None)
             return fetch.ocr_langs()
 
-    def test_adds_japanese_when_installed(self):
-        self.assertEqual(self.langs(self.listing("eng", "jpn", "jpn_vert", "osd")), "jpn+jpn_vert+eng")
+    def test_prefers_chinese_then_optional_japanese_when_installed(self):
+        self.assertEqual(self.langs(self.listing("eng", "chi_sim", "chi_tra", "jpn", "jpn_vert", "osd")),
+                         "chi_sim+chi_tra+jpn+jpn_vert+eng")
+
+    def test_adds_simplified_chinese_when_installed(self):
+        self.assertEqual(self.langs(self.listing("eng", "chi_sim")), "chi_sim+eng")
 
     def test_old_tesseract_lists_on_stderr(self):
         self.assertEqual(self.langs(self.listing("eng", "jpn", stream="stderr")), "jpn+eng")
@@ -826,7 +830,7 @@ class OcrLanguageTests(unittest.TestCase):
     def test_low_confidence_text_is_not_used(self):
         text, note = self.ocr(self.fake_tools(conf=18.4))
         self.assertEqual(text, "")
-        self.assertIn("確信度が低い", note)
+        self.assertIn("OCR confidence is low", note)
 
     def test_confident_text_is_used(self):
         text, note = self.ocr(self.fake_tools(conf=90))
@@ -836,10 +840,10 @@ class OcrLanguageTests(unittest.TestCase):
     def test_a_timed_out_page_fails_the_whole_ocr(self):
         text, note = self.ocr(self.fake_tools(conf=90, fail_page="2"))
         self.assertEqual(text, "")
-        self.assertIn("読めなかったページ", note)
+        self.assertIn("OCR could not read pages", note)
 
     def test_pdftoppm_failing_midway_fails_the_whole_ocr(self):
-        # #14: pdftoppm が1ページだけ書いて終了コード 1 で落ちても、残りの画像だけで成功扱いにしない
+        # #14: pdftoppm が1ページだけ書いてexit code 1 で落ちても、残りの画像だけで成功扱いにしない
         tools = self.fake_tools(conf=95)
 
         def run(cmd, **kw):
@@ -849,16 +853,16 @@ class OcrLanguageTests(unittest.TestCase):
             return tools(cmd, **kw)
         text, note = self.ocr(run)
         self.assertEqual(text, "")
-        self.assertIn("終了コード 1", note)
+        self.assertIn("exit code 1", note)
 
     def test_fail_line_names_the_ocr_reason(self):
         with tempfile.TemporaryDirectory() as tmp, \
                 patch.object(fetch, "download", return_value=(b"%PDF-1.4\nscan", "application/pdf")), \
                 patch.object(fetch, "pdf_to_text", return_value=""), \
                 patch.object(fetch, "missing", return_value=[]), \
-                patch.object(fetch, "ocr_pdf", return_value=("", "OCR の確信度が低い（平均 18・言語 eng）")), \
+                patch.object(fetch, "ocr_pdf", return_value=("", "OCR confidence is low (average 18; languages eng)")), \
                 patch.object(fetch, "resolve", lambda host: {PUBLIC_IP}), \
                 contextlib.redirect_stdout(io.StringIO()) as out:
             with patch.object(sys, "argv", ["fetch.py", tmp, "scan", "https://example.test/scan.pdf"]):
                 self.assertEqual(fetch.main(), 1)
-        self.assertIn("確信度が低い", out.getvalue())
+        self.assertIn("OCR confidence is low", out.getvalue())

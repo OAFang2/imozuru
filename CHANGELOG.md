@@ -1,129 +1,113 @@
-# 変更履歴
+# Changelog
 
-imozuruのバージョンごとの変更を記録します。
-書式は [Keep a Changelog](https://keepachangelog.com/ja/1.1.0/) に、バージョン番号は [セマンティック バージョニング](https://semver.org/lang/ja/) に沿っています。
+All notable changes to imozuru are documented in this file.
 
-プラグインの `plugin.json` にはバージョン番号を書いていません。
-mainにコミットが入るたびに、使っている人へ更新が届きます。
-バージョン番号はまとまった変更の区切りを示すために、この変更履歴とgitのタグ（`v2.0.0` など）だけに付けます。
+The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and release numbers follow [Semantic Versioning](https://semver.org/). The plugin manifest intentionally has no version field; release numbers mark coherent changes in this changelog and in Git tags.
 
-## [未公開]
+## [Unreleased]
 
-### 追加
+### Added
 
-- ダッシュボードで文書を開くとき、読み込みに0.8秒以上かかると、枠の中に「読み込んでいます」の札を出すようにしました。これまでは読み込み中もサーバーが止まっているときも枠が白いままで、どちらなのか見分けられませんでした。
-- 文書を開けなかったときは、札に理由と次の行動を出します。理由は「サーバーが止まっている」「PCに届かない」「合言葉を確かめられない」「文書が見つからない」に分けます。札のボタンで読み直せます。
-- 10秒を超えても読み終わらないときは、サーバーが動いているかを確かめてから、まだ読み込んでいるのか止まっているのかを札に出します。
-- サーバーに届かないときの代わりの画面を、端末に置くようにしました。配信した画面（`--serve`）を一度開くとservice workerが入り、次からはサーバーが止まっていても白い画面にならず、理由の札を出します。札は5秒ごとにサーバーを確かめ、戻ったら自動で開き直します。端末に置くのは代わりの画面だけで、調査の中身は置きません。
-- 抜き書きと詳細レポートの引用に、元のページへのリンク「元のページを開く」を付けるようにしました（#16、yuki-kogetsuさんの報告と案）。URLはmap.mdの「原文（sources/）」の表の「元の URL」の列から引き、`http://`か`https://`で始まる完全なURLだけをリンクにします。「ファイル」の列は、読点・カンマ・中黒・全角の「／」で並べた書き方、`a.pdf/.txt`のようにPDFとその文字起こしを1つに書いた書き方、括弧の注記、`sources/`付きの書き方を読み分けます。1行にURLが複数あってファイルの数と合わないときは、リンクを付けません。表に無い原文は、取得の記録（fetch-log.jsonl）で取得に成功したURLを使います。抜き書きの`url`で、どちらにも無い原文にもリンクを付けられます。
+- Show a “Loading document” card when an embedded dashboard document takes more than 0.8 seconds to load.
+- Explain document-load failures and offer a retry action, distinguishing a stopped server, unreachable PC, rejected passphrase, and missing document.
+- After ten seconds, probe the server and distinguish a slow document from a stopped server.
+- Install an offline fallback through a service worker after the served dashboard is opened once. It stores only the fallback UI, probes every five seconds, and reloads automatically when the server returns; research content is never cached.
+- Add “Open original page” links to extract and detailed-report quotations (#16, reported and proposed by yuki-kogetsu). URLs are resolved from the Original URL column of the source table, then from `fetch-log.jsonl`, with explicit quotation URLs as a final override. Only complete http(s) URLs become links.
 
-### 修正
+### Fixed
 
-- PCにIPv6の経路が無いとき、原文の取得（fetch.py）と見張り（watch.py）が、IPv6の宛先ごとに接続の待ち時間（fetch.pyは90秒、watch.pyは60秒）いっぱい待ってからIPv4へ進み、IPv6の宛先が4つあるサイト（raw.githubusercontent.comなど）では1件に最大6分かかっていたのを直しました。IPv6とIPv4を交互に試し、次の宛先があるときは1つを10秒まで待って次へ移ります。つないだあとの読み込みの待ち時間は変えていません。
-- PCのEdgeなどでアプリとして入れた窓の中に、アプリとして入れる案内（右上のボタンと帯）が出続けていたのを直しました。manifestが無いうちに入れた窓はminimal-uiの表示で開くため、standaloneだけを見ていた判定ではアプリの窓と分かりませんでした。
+- Avoid waiting the full fetch timeout for every unreachable IPv6 address before trying IPv4. IPv6 and IPv4 are interleaved, each address receives a short initial connection attempt, and slow candidates receive a final retry without changing post-connect read timeouts.
+- Hide install guidance inside existing Edge and other minimal-ui app windows, not only standalone windows.
 
 ## [2.0.0] - 2026-10-25
 
-1.0のimozuruは原文を集め、抜き書きとして見せるところまでを受け持っていました。
-AIの判断能力は形式知・ノウハウを収集することで強化されます。
-原文に書かれた形式知・ノウハウを集めて、AIの判断の材料にすることが、1.0までの主な目的でした。
+Version 1.0 collected original sources and presented verified extracts. Version 2.0 broadened the human-reading side of the workflow.
 
-2.0のメジャーアップデートでは受け持つ範囲を広げ、人間が見ることに重点を置いて強化しました。
+### Highlights
 
-### 2.0の要点
+- **Understand the research**: a detailed report explains the field at three reader levels, with source evidence for every sentence.
+- **Review past research**: one dashboard shows all topics, progress, and stop reasons.
+- **Read anywhere**: the dashboard can be served to a phone.
+- **Use one visual system**: extracts, detailed reports, `map.md`, and `log.md` share the dashboard design.
 
-- **人間が読んで理解する**: 詳細レポートが調べた分野を読み手の水準に合わせた3編の解説にします。解説の1文ごとに原文の根拠が付きます。
-- **人間が見返す**: 調査記録のダッシュボードがすべてのトピックの進み具合と終了理由を1枚のページに並べます。
-- **どこからでも見る**: ダッシュボードをスマホから閲覧できます。
-- **同じ見た目で読む**: 抜き書き・詳細レポート・map.md・log.mdを、ダッシュボードと同じ見た目で表示します。
+### Added
 
-### 追加
+- **Detailed reports** (`digest.py`, `digest.html`)
+  - Three explanations for readers with no background, neighboring-field knowledge, and specialist knowledge.
+  - Verbatim evidence for every explanatory sentence, verified against local source lines before HTML is written.
+  - Retrieval questions at the end of each level.
+  - A complete query and fetch record with site totals and saved, failed, and not-fetched states.
+- **Query records** (`queries.jsonl`)
+  - `digest.py add` and `chain.py --log` preserve every hit for every query.
+- **Research dashboard** (`dashboard.py`)
+  - Reads the research root and assembles one page for all topics.
+  - Summarizes stop reasons, source hosts, and rounds.
+  - Opens topic details, detailed reports, extracts, maps, and logs in the same interface.
+  - Searches titles, questions, terms, people, and venues; legacy Japanese records also match hiragana and romaji.
+  - Pages the sidebar and supports desktop, touch, and pull-to-refresh navigation.
+  - Includes an illustrated help view.
+- **Dashboard serving** (`dashboard.py --serve`)
+  - Serves read-only content on 127.0.0.1 behind a passphrase URL for relaying through Tailscale or a similar tool.
+  - Restricts Host values to loopback, `*.ts.net`, and explicit `IMOZURU_SERVE_HOSTS` entries.
+  - Requires at least 16 characters for a fixed `IMOZURU_SERVE_TOKEN`.
+  - Excludes symlinked topic folders and documents.
+  - Includes home-screen and browser-tab icons.
+- **Installable app**
+  - Supports installation from Chrome, Edge, and mobile browsers; installed instances retain access without re-entering the passphrase.
+  - Offers browser-specific installation guidance.
+- **PDF output**
+  - Prints only the selected document, opens evidence, removes interface chrome, and uses indented quotations.
+  - Opens a standalone document before printing in Safari and on iPhone.
+- **Feedback**
+  - Sends a user-written report, imozuru version, and browser type to a configured Google Form without sending topic names, research content, or page URLs.
+  - Configure with `IMOZURU_FEEDBACK_FORM`; use `off` to disable.
+- **Document bundle** (`dashboard.py --bundle`)
+  - Copies the dashboard and generated documents without original-source files.
+- **PMC full text** (`fetch.py`; #12, @hattorimayumi0105)
+  - Retrieves PMC articles from Europe PMC full-text XML when the article page is blocked.
+  - Rejects XML entity declarations and enforces element-count and depth limits.
+- **Map Title and Reading fields**
+  - A short Title appears in the dashboard.
+  - Reading aliases preserve hiragana/romaji search for legacy Japanese records.
+- **Shared document styling** (`skin.py`, `palette.py`)
+  - Renders extracts, detailed reports, maps, and logs with a shared dashboard-aligned theme.
+  - Renders Markdown headings, lists, and tables rather than raw text.
 
-- **詳細レポート**（`digest.py`・`digest.html`）
-  - 調べ終えたあとに、前提知識の違う読み手ごとに3編の解説を書きます（Lv1は前提知識の無い人、Lv2は近い分野を知っている人、Lv3は専門の人）。
-  - 解説の1文ごとに原文の引用を付け、引用が原文に在るかを機械で照合します。照合に通らない文が1つでもあれば、ページを作りません。
-  - 各編の末尾に、理解を確認する問いを置きます。
-  - 検索の全記録（検索語ごとのヒットの全件と、保存・取得失敗・未取得の区別）を、サイトごとの集計と一緒に載せます。
-- **検索の記録**（`queries.jsonl`）
-  - `digest.py add` と `chain.py --log` が検索語ごとのヒットを全件残します。
-- **調査記録のダッシュボード**（`dashboard.py`）
-  - 調査の置き場（既定 `~/research`）を読み、トピックごとの記録を1枚のページにまとめます。
-  - ホームに、終了理由・原文の取得元・周回数の集計を並べます。
-  - サイドバーからトピックを選ぶと、トピック詳細（論点・周回数・原文・文書）が開きます。
-  - 詳細レポートや抜き書きは、ダッシュボードの枠の中で開きます。
-  - サイドバーの検索は題名・疑問・用語・人物・媒体を対象にします。ひらがな・ローマ字・変換途中の入力でも一致します。
-  - サイドバーは画面に収まる分ずつページで送ります（ボタン・ホイール・上下のスワイプ）。
-  - スマホでは横のスワイプでサイドバーを開閉し、画面の最上部で下へ引くと記録を再読み込みします。
-  - ヘルプに、スマホとパソコンの画面の図と各部の説明を載せています。
-- **ダッシュボードの配信**（`dashboard.py --serve`）
-  - 127.0.0.1で、合言葉付きのURLとして配信します。Tailscaleなどで中継すれば、スマホから閲覧できます。
-  - 受け付けるHostは `127.0.0.1`・`localhost`・`*.ts.net` と、環境変数 `IMOZURU_SERVE_HOSTS` に並べた名前だけです（DNS rebindingへの備え）。
-  - `IMOZURU_SERVE_TOKEN` で固定する合言葉は16文字以上にします。短いと起動しません。
-  - 調査のフォルダや文書がシンボリックリンクなら、一覧にも配信にも書き出しにも入れません。
-  - ホーム画面に追加したときのアイコンと、ブラウザのタブのアイコンを付けました。
-- **アプリとして入れる**（`dashboard.py --serve`）
-  - パソコンのChrome・Edgeと、スマホで、ダッシュボードをアプリとして入れられます。入れたアプリは合言葉を入力せずに開けます。
-  - 右上に入れるボタンを置き、初めて開いたときは画面の下に案内を出します。案内は閉じると二度と出しません。
-  - ブラウザが入れる画面を出せないとき（iPhoneのSafariなど）は、そのブラウザでの手順を表示します。
-- **PDFで保存**
-  - 文書の表示中に、左下のボタンで文書をPDFで保存（印刷）できます。根拠の引用は開いた状態で、枠を付けずに字下げして刷ります。背景の質感や操作のボタンは刷りません。
-  - iPhoneとSafariでは、文書だけのページを開いてから印刷の画面を出します。ダッシュボードの枠の中の文書を刷ろうとすると、画面全体が刷られるためです。
-  - 抜き書き・詳細レポート・map.md・log.mdは、ブラウザの印刷でも同じ形で刷れます。
-- **感想・要望を送る**
-  - 右上のボタンから、作者のGoogleフォームへ感想・要望・不具合を送れます。送るのは書いた内容とimozuruのバージョン・ブラウザの種類だけで、調査の題や中身は送りません。
-  - 送り先は環境変数 `IMOZURU_FEEDBACK_FORM` で差し替えられ、`off` で消せます。
-- **文書だけの書き出し**（`dashboard.py --bundle`）
-  - ページと、各トピックの詳細レポート・抜き書き・map.md・log.mdだけを別の場所へ書き出します。原文（`sources/`）は含めません。
-- **PMCの記事の全文**（`fetch.py`・#12、@hattorimayumi0105 さん）
-  - PMCの記事のURLは、確認画面で止まるため、Europe PMCの全文XMLから取って見出し・段落ごとの .md にします。
-  - XMLの実体の宣言は文字コードに関係なく断り、要素の数と入れ子の深さに上限を設けています。
-- **map.mdの「題:」と「読み:」**
-  - 「題:」はサイドバーとトピック詳細の見出しに使う短い題名です（20字まで）。
-  - 「読み:」は、検索で漢字の語をひらがなやローマ字でも一致させるための読みです。
-- **文書の共通の見た目**（`skin.py`・`palette.py`）
-  - 抜き書き・詳細レポート・map.md・log.mdを、ダッシュボードと同じ見た目で表示します。
-  - map.mdとlog.mdは、見出し・箇条書き・表に組んで表示します。
+### Changed
 
-### 変更
-
-- 文書とダッシュボードで内部の呼び名を使っていた所を、読み手に通じる言葉へ置き換えました。
-  - 要る主張 → 調査の論点
-  - 付いた・一部だけ・付かなかった → 根拠あり・一部のみ・根拠なし
-  - 場 → 媒体
-  - 古い言葉で書いた `extracts.json` もそのまま読めます。
-- 全角の「＃」「：」などを含む壊れたURLが1本あっても、ダッシュボード・詳細レポート・md の表示と取得が止まらないようにしました。
-- 原文のリンクはHTMLでもPMCのXMLでも http(s) のものだけを残します。
-- 原文を取るときは、つなぐ直前に名前を引き直して同じ宛先の検査をかけ、確かめたIPへじかにつなぎます。名前の引き先を途中で変える手（DNS rebinding）で、手元のサービスの中身を取られないようにしました（#13、@akira0222 さん）。プロキシを通すときは名前をプロキシが引くので、この手は防げません。
-- PDFを画像にするpdftoppmが途中で失敗したときは、書き出せたページだけでOCRを成功扱いにせず、OCR全体を失敗にします（#14、@Boba7567 さん）。
-- 環境変数 `IMOZURU_DASH_THEME` に知らない値が入っていても、ダッシュボードが起動するようにしました。
-- 原文の保存がPDFと文字起こしの2つ目で失敗したときは、前の原文に戻します。
-- ページの書き出しの一時ファイルを、毎回別の名前で作るようにしました。
-- 抜き書きのページで、英語の引用に英語の言語指定を付けました。読み上げと書体の選択が英語として行われます。
-- 抜き書きのページと詳細レポートから、ページの作りを説明する前置きの文（「ここに並ぶ引用は、すべて原文をそのまま切り出したもの」など）を削りました。
+- Replaced internal vocabulary in generated documents with reader-facing terminology and retained compatibility with older status values.
+- Made malformed Unicode URLs non-fatal in fetching, dashboards, detailed reports, and Markdown rendering.
+- Kept only http(s) links from fetched HTML and PMC XML.
+- Re-resolved and pinned checked destination IPs immediately before connections to reduce DNS-rebinding risk (#13, @akira0222). Proxy resolution remains outside this protection.
+- Treat a partial `pdftoppm` failure as an OCR failure rather than accepting incomplete pages (#14, @Boba7567).
+- Ignore unknown `IMOZURU_DASH_THEME` values instead of failing startup.
+- Restore prior source files when saving a second output fails.
+- Use unique temporary names for page writes.
+- Add explicit language attributes to quotations.
+- Remove explanatory boilerplate from extract and detailed-report pages.
 
 ## [1.0.0] - 2026-10-21
 
-原文を集め、抜き書きとして見せるバージョンです。
-形式知・ノウハウを収集して、AIの判断能力を強化することを目的にしています。
-最初に公開したバージョン（2026-10-13）から、利用者のイシューと外部のレビューで直した分までをまとめて1.0.0とします。
+The first release collected original sources and presented verified extracts to strengthen AI judgment with explicit knowledge and know-how. It includes fixes accumulated since the initial publication on 2026-10-13.
 
-### 主な内容
+### Added
 
-- 知らない分野を、言葉・人・媒体から原文までたどる手順（SKILL.md）と、止めどきの判断（論点の全部に原文が付く・飽和・周回の上限・ログインか有料で取れない・依頼の時間や回数の上限）。
-- 原文の取得（`fetch.py`）、引用と著者の追跡（`chain.py`）、新着の見張り（`watch.py`）、抜き書きのページ（`report.py`）。
-- Claude Codeのプラグインとして導入できる形。
+- The `SKILL.md` workflow for tracing an unfamiliar field from terms, people, and venues to original sources.
+- Evidence-based stop conditions: all points covered, saturation, round limit, login/payment blockage, or an agreed time/round limit.
+- Source fetching (`fetch.py`), citation and author following (`chain.py`), feed monitoring (`watch.py`), and verified extract pages (`report.py`).
+- Claude Code plugin packaging.
 
-### 1.0.0までに直したもの
+### Fixed
 
-- 取り直しに失敗しても、保存済みの原文を残す（#1・#2）。
-- Windows（cp932）とPython 3.10で止まらない（#3）。
-- Shift_JIS・EUC-JPのページを、宣言された文字コードで読む。
-- YouTubeの自動字幕は動画の元の言語のものだけを取る（#6）。
-- http(s) 以外のURLを取りに行かない（#10）。
-- 日本語の字を含むURLと、Wで始まる題名で落ちない（#7・#9）。
-- 検索結果から来るURL・本文・フィードを、他人が細工したものとして扱う。
-- 文字の層が無いPDFのOCRで、言語データから言語を選び、意味をなさない読み取りを失敗として扱う（#11）。
+- Preserve saved sources when a refetch fails (#1, #2).
+- Support Windows cp932 terminals and Python 3.10 (#3).
+- Decode Shift_JIS and EUC-JP pages from declared encodings.
+- Fetch only the original-language automatic YouTube captions to avoid translated-caption rate-limit failures (#6).
+- Reject non-http(s) URLs (#10).
+- Handle Unicode URLs and titles beginning with W (#7, #9).
+- Treat URLs, fetched bodies, and feeds as untrusted input.
+- Select installed OCR language packs and reject meaningless low-confidence OCR (#11).
 
-[未公開]: https://github.com/MaryCache/imozuru/compare/v2.0.0...HEAD
+[Unreleased]: https://github.com/OAFang2/imozuru/compare/v2.0.0...HEAD
 [2.0.0]: https://github.com/MaryCache/imozuru/compare/v1.0.0...v2.0.0
 [1.0.0]: https://github.com/MaryCache/imozuru/releases/tag/v1.0.0
