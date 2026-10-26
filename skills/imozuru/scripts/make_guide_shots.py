@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
-"""Render the dashboard guide images in assets/guide-*.webp.
+"""説明の節（#guide）に載せる画面の図（assets/guide-*.webp）を描き出す。開発用の道具。
 
-This development tool is run only after the interface changes. It captures fictional research
-so private real topics never enter checked-in images, then overlays numbered callouts whose
-accessible explanations remain as text in the dashboard.
+画面の作りを変えたときだけ回す。ページを作るたびには要らない（dashboard.py は出来上がった絵を埋め込むだけ）。
+文字だけの説明では、ホーム・一覧・紙面がどこにあるかを思い浮かべにくい（2026-10-22 かしぇ「画像でわかるようにもするのいいかも」）。
+本物の調査を写すと、人に見せたくない題が絵に残るので、架空の調査を並べたモックを撮る。
+撮る前に、指したい部品の上に番号の印を重ねる。番号の意味は絵の下の文字に書く（絵の中に文を描くと、読み上げられず直しにくい）。
 
-Usage:
-    make_guide_shots.py    Regenerate all guide images and assets/screenshots/dashboard.webp.
-                           Requires Playwright WebKit and Pillow.
+使い方:
+    make_guide_shots.py    … 絵を全部描き直す（README の assets/screenshots/dashboard.webp も）。playwright の webkit と Pillow が要る（~/.venvs/tools/bin/python で回す）
 """
 
 import io
@@ -21,29 +21,29 @@ import dashboard  # noqa: E402
 import palette  # noqa: E402
 import skin  # noqa: E402
 
-# Fictional research used only in screenshots.
+# 架空の調査。題・問い・区切った理由・原文を取った場所だけを持つ
 MOCK = [
-    ("sunset-red", "Why sunsets are red", "Which properties of light make the evening sky look red?", "Sources for 6/6 claims", 2,
-     ["https://journals.example.org/a", "https://www.example.edu/b", "https://zh.example.org/c"]),
-    ("tea-ceremony", "Origins of tea ceremony etiquette", "When and by whom was tea ceremony etiquette established?", "Stopped after round 1 (sources for 3/5 claims)", 1,
+    ("sunset-red", "夕焼けはなぜ赤いか", "夕方の空が赤く見えるのは、光のどんな性質によるのか", "論点6/6に原文", 2,
+     ["https://journals.example.org/a", "https://www.example.edu/b", "https://ja.example.org/c"]),
+    ("tea-ceremony", "茶の湯の作法の由来", "茶の湯の作法は、いつ誰が決めたのか", "1周目まで（論点3/5に原文）", 1,
      ["https://archive.example.jp/a", "https://www.example.ac.jp/b"]),
-    ("bird-songs", "Regional dialects in birdsong", "Why does one bird species sing differently by region?", "Saturated (11 of 14 results already known)", 3,
+    ("bird-songs", "鳥のさえずりの方言", "同じ種の鳥でも、地域でさえずりが違うのはなぜか", "飽和した（挙がった14件中11件が既知）", 3,
      ["https://journals.example.org/c", "https://www.example.edu/d"]),
-    ("bread-yeast", "Why sourdough bread fails", "Why does sourdough bread sometimes fail to rise?", "Limit reached", 1, ["https://blog.example.net/a"]),
-    ("type-history", "Origins of Ming typefaces", "Where did the shapes of Ming typefaces originate?", "Key primary source is paywalled", 2,
+    ("bread-yeast", "天然酵母のパンの失敗", "天然酵母のパンが膨らまない原因は何か", "約束で打ち切り", 1, ["https://blog.example.net/a"]),
+    ("type-history", "明朝体の成り立ち", "明朝体の形は、どこから来たのか", "要の原典が有料で取れない", 2,
      ["https://archive.example.jp/b", "https://www.example.ac.jp/c"]),
-    ("moss-garden", "Caring for moss gardens", "How can a moss garden be maintained without drying out?", "Sources for 4/4 claims", 2, ["https://blog.example.net/b"]),
-    ("old-maps", "Reading historical maps", "What do symbols on old city maps represent?", "Stopped after four rounds", 4,
-     ["https://archive.example.jp/c", "https://zh.example.org/d"]),
-    ("glass-color", "How colored glass is made", "Which additives produce colors in glass?", "Sources for 5/5 claims", 2, ["https://www.example.edu/e"]),
+    ("moss-garden", "苔庭の手入れ", "苔庭を枯らさずに保つには何をするか", "論点4/4に原文", 2, ["https://blog.example.net/b"]),
+    ("old-maps", "古地図の読み方", "江戸の古地図の記号は、何を表すのか", "4周たどって区切った", 4,
+     ["https://archive.example.jp/c", "https://ja.example.org/d"]),
+    ("glass-color", "ガラスの色の出し方", "色ガラスの色は、何を混ぜて出すのか", "論点5/5に原文", 2, ["https://www.example.edu/e"]),
 ]
 # 一覧が2ページ以上になるよう、題だけの調査を足す（1ページに収まるとページ送りが出ず、図で指せない）
-MOCK += [(f"extra-{i}", title, f"How should {title.lower()} be researched?", reason, 1, ["https://blog.example.net/c"])
+MOCK += [(f"extra-{i}", title, f"{title}は、どう調べればよいか", reason, 1, ["https://blog.example.net/c"])
          for i, (title, reason) in enumerate([
-             ("How lacquer dries", "Sources for 3/3 claims"), ("How handmade paper is formed", "Stopped after round 1 (sources for 2/4 claims)"), ("Origins of constellation names", "Sources for 4/4 claims"),
-             ("Fixing dye colors", "Saturated"), ("Wiring bonsai", "Limit reached"), ("Festival music rhythms", "Sources for 3/3 claims"),
-             ("Textile pattern history", "Stopped after round 1"), ("Printing woodblock art", "Sources for 5/5 claims")])]
-CLAIMS = ["Where is knowledge in this field collected?", "What is the standard method?", "Where does it fail?", "Is there primary research behind it?"]
+             ("漆の乾き方", "論点3/3に原文"), ("和紙の漉き方", "1周目まで（論点2/4に原文）"), ("星座の名前の由来", "論点4/4に原文"),
+             ("染め物の色止め", "飽和した"), ("盆栽の針金かけ", "約束で打ち切り"), ("祭り囃子の拍子", "論点3/3に原文"),
+             ("手ぬぐいの柄", "1周目まで"), ("木版画の刷り方", "論点5/5に原文")])]
+CLAIMS = ["この分野の知見はどこに集まっているか", "定番の手法は何か", "どこで失敗するか", "その元になった研究はあるか"]
 
 PHONE = (390, 760)
 PHONE_TALL = (390, 1180)  # 紙面は札が縦に3枚続くので、文書と論点の札まで入る高さで撮る
@@ -56,22 +56,22 @@ QUALITY = 72
 
 
 def build_mock(root: Path) -> list[dict]:
-    """Build fictional research folders and load them through dashboard.collect."""
+    """架空の調査のフォルダと台帳を作り、dashboard.collect で読む"""
     rows = ["| 日付 | 話題 | 型 | 回した人 | 調査を区切った理由 | 周 | 原文 | 感覚と合った？ |", "|---|---|---|---|---|---|---|---|"]
     for i, (slug, title, question, reason, rounds, urls) in enumerate(MOCK):
         d = root / slug
         (d / "sources").mkdir(parents=True)
         for j in range(len(urls) * 3):
             (d / "sources" / f"s{j}.md").write_text("x", encoding="utf-8")
-        table = "".join(f"| Source {j} | s{j}.md | {u} | Round 1 |\n" for j, u in enumerate(urls))
+        table = "".join(f"| 資料{j} | s{j}.md | {u} | 1周 |\n" for j, u in enumerate(urls))
         claims = "".join(f"- [{'x' if k < 3 else ' '}] {c}\n" for k, c in enumerate(CLAIMS))
-        (d / "map.md").write_text(f"# map: {slug}\n\nQuestion: {question}\nTitle: {title}\n\n## Research points\n{claims}\n"
-                                  f"## Original sources (sources/)\n| Source | File | Original URL | Round |\n|---|---|---|---|\n{table}", encoding="utf-8")
+        (d / "map.md").write_text(f"# map: {slug}\n\n問い: {question}\n題: {title}\n\n## 調査の論点\n{claims}\n"
+                                  f"## 原文（sources/）\n| 資料 | ファイル | 元の URL | 周 |\n|---|---|---|---|\n{table}", encoding="utf-8")
         date = f"2026-{10 - i // 28:02d}-{28 - i % 28:02d}"
         (d / "log.md").write_text(f"# log\n\n## 0周目（{date}）\n\n" + "".join(f"## {r}周目\n\n" for r in range(1, rounds + 1)), encoding="utf-8")
         # 検索と取得の記録（架空）。無いと紙面の「検索と取得」が「記録なし」になる
         recs = [{"round": r, "by": "scout", "method": "WebSearch", "query": f"{title} {k}",
-                 "hits": [{"title": f"Source {k}-{h}", "url": f"{urls[h % len(urls)]}/{r}{k}{h}"} for h in range(6)]}
+                 "hits": [{"title": f"資料{k}-{h}", "url": f"{urls[h % len(urls)]}/{r}{k}{h}"} for h in range(6)]}
                 for r in range(1, rounds + 1) for k in range(4)]
         (d / "queries.jsonl").write_text("".join(json.dumps(x, ensure_ascii=False) + "\n" for x in recs), encoding="utf-8")
         logs = [{"url": f"{u}/{j}", "status": "OK" if j % 4 else "FAIL", "file": f"s{j}.md", "reason": "404"}
@@ -79,19 +79,19 @@ def build_mock(root: Path) -> list[dict]:
         (d / "fetch-log.jsonl").write_text("".join(json.dumps(x, ensure_ascii=False) + "\n" for x in logs), encoding="utf-8")
         for name in ("digest.html", "report.html"):
             (d / name).write_text(mock_doc(title, question), encoding="utf-8")
-        rows.append(f"| {date} | {slug} | 掘り | Monet | {reason} | {rounds} | {len(urls) * 3} | Looks right |")
+        rows.append(f"| {date} | {slug} | 掘り | モネ | {reason} | {rounds} | {len(urls) * 3} | 「いいね」 |")
     runs = root.parent / "runs.md"
     runs.write_text("\n".join(rows) + "\n", encoding="utf-8")
     return dashboard.collect(root, dashboard.load_runs(runs))
 
 
 def mock_doc(title: str, question: str) -> str:
-    """Return a short fictional page with the same paper treatment as a full digest."""
-    body = (f'<section class="sheet"><h1>{title}</h1><dl class="overview"><dt>Question</dt><dd>{question}</dd>'
-            '<dt>Why the research stopped</dt><dd>Every claim has a primary source.</dd></dl></section>'
-            '<section class="sheet"><h2>Summary</h2><p>Evidence-based explanation appears here, supported by quotations from sources.</p>'
-            '<p>Select a sentence to open its supporting quotation.</p></section>')
-    return skin.page(f"{title} — Detailed report", body, extra_head=f"<style>{skin.CSS}</style>")
+    """文書の代わりのページ。本物の詳細レポートと同じ紙の見た目で、冒頭だけを持つ"""
+    body = (f'<section class="sheet"><h1>{title}</h1><dl class="overview"><dt>調べたこと</dt><dd>{question}</dd>'
+            '<dt>調査を区切った理由</dt><dd>論点の全部に原文が付いた</dd></dl></section>'
+            '<section class="sheet"><h2>要旨</h2><p>ここに、原文の引用を根拠にした解説の文が並ぶ。</p>'
+            '<p>文を押すと、その文の根拠の引用が開く。</p></section>')
+    return skin.page(f"{title} 詳細レポート", body, extra_head=f"<style>{skin.CSS}</style>")
 
 
 # 指す部品の上に番号の印を重ねるスクリプト。印は部品を囲む枠と、枠の左上の丸い番号
@@ -122,7 +122,7 @@ def shoot(page, path: Path, marks: list[tuple[str, str]], clip: tuple[int, int, 
     width = width or min(WIDTH_PC, (clip[2] if clip else page.viewport_size["width"]) * 2)
     img = img.resize((width, round(img.height * width / img.width)), Image.LANCZOS)
     img.save(path, "WEBP", quality=QUALITY, method=6)
-    print(f"→ {path} ({path.stat().st_size / 1024:.0f} KB)")
+    print(f"→ {path}（{path.stat().st_size / 1024:.0f} KB）")
 
 
 def main() -> int:

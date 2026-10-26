@@ -1,21 +1,21 @@
 {
   "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
   "name": "imozuru",
-  "description": "The imozuru research-skill marketplace",
+  "description": "imozuru のマーケットプレイス",
   "owner": {
-    "name": "OAFang2"
+    "name": "MaryCache"
   },
   "plugins": [
     {
       "name": "imozuru",
-      "description": "Trace an unfamiliar field back to original sources",
+      "description": "知らない分野を、原文にたどりつくまで芋づる式に掘るスキル",
       "author": {
-        "name": "OAFang2"
+        "name": "MaryCache"
       },
       "source": "./",
       "category": "productivity",
-      "homepage": "https://github.com/OAFang2/imozuru",
-      "repository": "https://github.com/OAFang2/imozuru",
+      "homepage": "https://github.com/MaryCache/imozuru",
+      "repository": "https://github.com/MaryCache/imozuru",
       "license": "MIT"
     }
   ]

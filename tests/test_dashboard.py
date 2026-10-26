@@ -119,7 +119,7 @@ class DashboardTests(unittest.TestCase):
                 target.parent.mkdir(parents=True, exist_ok=True)
                 target.symlink_to(outside if relative in (".", "new-topic") else marker)
                 topics = dash.collect(self.root, [])
-                with self.assertRaisesRegex(ValueError, "symbolic links"):
+                with self.assertRaisesRegex(ValueError, "シンボリックリンク"):
                     dash.write_bundle(topics, self.root, dest)
                 self.assertEqual(marker.read_text(encoding="utf-8"), "変えない")
                 self.assertEqual(list(outside.iterdir()), [marker])
@@ -128,7 +128,7 @@ class DashboardTests(unittest.TestCase):
                 err = io.StringIO()
                 with patch("sys.argv", ["dashboard.py", str(self.root), "--bundle", str(dest)]), contextlib.redirect_stderr(err):
                     self.assertEqual(dash.main(), 2)
-                self.assertIn("symbolic links", err.getvalue())
+                self.assertIn("シンボリックリンク", err.getvalue())
 
     def test_index_write_ignores_old_temp_symlink_and_cleans_up_on_error(self):
         import contextlib, io
@@ -174,7 +174,7 @@ class DashboardTests(unittest.TestCase):
                 with patch("http.server.ThreadingHTTPServer") as server, contextlib.redirect_stderr(io.StringIO()) as err:
                     self.assertEqual(dash.serve(self.root, [], 8765), 2)
                 server.assert_not_called()
-                self.assertIn("IMOZURU_SERVE_TOKEN must be at least 16 characters", err.getvalue())
+                self.assertIn("IMOZURU_SERVE_TOKEN は16文字以上にしてください", err.getvalue())
 
     def test_generated_and_long_serve_tokens_work(self):
         import contextlib, io, os
@@ -206,7 +206,7 @@ class DashboardTests(unittest.TestCase):
                 self.assertIn("Host", body.decode())
         status, _, body = self.request("/?k=wrong", {"Host": "localhost:8765"}, handler)
         self.assertEqual(status, 403)
-        self.assertIn("passphrase", body.decode())
+        self.assertIn("合言葉", body.decode())
         status, _, body = self.request("/?k=%C3%A9", {"Host": "evil.example.com:8765"}, handler)
         self.assertEqual(status, 403)
         self.assertIn("Host", body.decode())
@@ -245,28 +245,28 @@ class DashboardTests(unittest.TestCase):
         self.assertEqual(t["rounds"], 2)          # 0周目は数えない
         self.assertEqual(t["sources"], 2)         # a.pdf と a.txt は1本
         self.assertEqual(sorted(t["hosts"]), ["blog.example.test", "example.test"])
-        self.assertEqual(t["claims"], [("仕組み", "supported"), ("原典", "unverified")])
+        self.assertEqual(t["claims"], [("仕組み", "根拠あり"), ("原典", "未確認")])
         self.assertEqual(t["date"], "2026-10-20")
 
     def test_ledger_row_without_runner_column_and_watch_rows(self):
         t = self.collect()["new-topic"]
         # 「回した人」の列が無い行も列をずらさずに読み、見張りの行より掘った行を使う
         self.assertEqual(t["run"]["周"], "2")
-        self.assertEqual(t["reason_class"], "Complete")
+        self.assertEqual(t["reason_class"], "論点充足")
 
     def test_topic_without_records_is_marked_not_zero(self):
         t = self.collect()["empty-topic"]
         self.assertIsNone(t["rounds"])
         self.assertIsNone(t["searches"])
-        self.assertEqual(t["reason_class"], "No record")
+        self.assertEqual(t["reason_class"], "記録欠落")
         page = dash.render(list(self.collect().values()), self.root)
-        self.assertIn("No record", page)
+        self.assertIn("記録なし", page)
 
     def test_reason_classes(self):
-        self.assertEqual(dash.classify("約束で打ち切り（壁が多い）"), "Limit reached")
-        self.assertEqual(dash.classify("2周で区切った（要の原典5本が出版社のボット対策で取れない）"), "Blocked")
-        self.assertEqual(dash.classify("1周目まで（論点3/5に原文）"), "Partial")
-        self.assertEqual(dash.classify("論点6/6に原文（道具の比較は一部だけ）"), "Complete")
+        self.assertEqual(dash.classify("約束で打ち切り（壁が多い）"), "期限到達")
+        self.assertEqual(dash.classify("2周で区切った（要の原典5本が出版社のボット対策で取れない）"), "取得不可")
+        self.assertEqual(dash.classify("1周目まで（論点3/5に原文）"), "一部充足")
+        self.assertEqual(dash.classify("論点6/6に原文（道具の比較は一部だけ）"), "論点充足")
 
     def test_page_escapes_text_and_runs_only_the_hashed_script(self):
         import base64
@@ -351,8 +351,8 @@ class DashboardTests(unittest.TestCase):
             encoding="utf-8")
         topics = dash.collect(self.root, [])
         info = next(t for t in topics if t["slug"] == "new-topic")
-        self.assertEqual(info["words"], [("Term", 'Rayleigh 散乱（"短い" <波長>）'), ("Term", "薄明"),
-                                         ("Person", "Strutt（レイリー卿）"), ("Venue", "AMS")])
+        self.assertEqual(info["words"], [("用語", 'Rayleigh 散乱（"短い" <波長>）'), ("用語", "薄明"),
+                                         ("人", "Strutt（レイリー卿）"), ("媒体", "AMS")])
         page = dash.render(topics, self.root)
         self.assertNotIn("<波長>", page)
         self.assertIn("&lt;波長&gt;", page)
@@ -404,33 +404,48 @@ class DashboardTests(unittest.TestCase):
         page = dash.render(dash.collect(self.root, []), self.root)
         doc = dash.with_back("map.md", "# 地図".encode(), "new-topic").decode()
         for p in (page, doc):
-            self.assertIn('<html lang="en">', p)
+            self.assertIn('<html lang="ja">', p)
             self.assertIn('name="format-detection" content="telephone=no"', p)
             self.assertEqual('rel="icon" type="image/png" href="data:image/png;base64,' in p,
                              (skin.ASSETS / "favicon.png").is_file())
         en = report.quote_html(self.root, {"file": "a.txt", "line": 1, "text": "Rayleigh scattering"}, ["Rayleigh scattering"], 1)
         self.assertIn('<blockquote lang="en">', en)
         self.assertIn('<pre lang="en">', en)
-        zh = report.quote_html(self.root, {"file": "a.txt", "line": 1, "text": "天空是蓝色的"}, ["天空是蓝色的"], 1)
-        self.assertIn('<blockquote lang="zh-Hans">', zh)
+        ja = report.quote_html(self.root, {"file": "a.txt", "line": 1, "text": "空が青い"}, ["空が青い"], 1)
+        self.assertIn("<blockquote>", ja)
 
     def test_ledger_note_only_when_numbers_differ(self):
         t = self.collect()["new-topic"]
         t["run"] = {**t["run"], "周": "2周", "原文": "原文5本", "感覚と合った？": "「いいね」"}
         out = dash.topic_html(t)
-        self.assertNotIn("ledger 2周", out)
-        self.assertIn("ledger 原文5本", out)
-        self.assertIn("<dt>User response</dt>", out)
+        self.assertNotIn("台帳 2周", out)
+        self.assertIn("台帳 原文5本", out)
+        self.assertIn("<dt>ユーザーの反応</dt>", out)
 
     def test_guide_shows_screens_with_numbered_legend(self):
         guide = dash.guide_html(list(self.collect().values()))
-        self.assertIn("About the <span lang=\"en\">imozuru</span> Research Dashboard", guide)
-        self.assertIn("Phone controls", guide)
-        self.assertIn("Desktop controls", guide)
+        have = all(dash.LOGO.with_name(f"guide-{d}-{k}.webp").is_file() for d in ("sp", "pc") for k, _, _ in dash.GUIDE_SCREENS)
+        # 図があれば図と番号の説明、無ければ文字の3行で画面の見方を書く。どちらでも「ホーム」の説明は出る
+        self.assertEqual('<img src="data:image/webp;base64,' in guide, have)
+        self.assertIn("ホーム", guide)
+        if have:
+            self.assertIn('<span class="n">9</span>', guide)
+            # 両方の端末にある部品（数字）は、どちらの組にも同じ番号と説明で並ぶ。片方だけの部品は文字の印（.only）で、その組にだけ載る
+            sp, pc = guide.split('data-dev="sp"')[1].split('data-dev="pc"')
+            pc = pc.split("</details>")[0]
+            num = lambda h: __import__("re").findall(r'<li><span class="n">(\d+)</span>([^<]*)</li>', h)
+            self.assertEqual(num(sp), num(pc))
+            self.assertIn("サイドバーを閉じる", sp)
+            self.assertNotIn("サイドバーを閉じる", pc)
+            self.assertIn("つまみ", pc)
+            # 題 → 図 → 番号の説明の順。スマホとパソコンの組は、それぞれ畳みに入る
+            self.assertIn('<figure class="shot"><figcaption>', guide)
+            self.assertIn('data-dev="sp"', guide)
+            self.assertNotIn('<ul class="parts">', guide)
 
     def test_guide_breaks_lines_per_sentence_but_not_inside_tags(self):
         guide = dash.guide_html(list(self.collect().values()))
-        self.assertIn("This dashboard groups each research question", guide)
+        self.assertIn("ダッシュボードです。<br>", guide)
         self.assertEqual(dash.sentence_lines('<p>一。二。</p><img alt="a。b">'), '<p>一。<br>二。</p><img alt="a。b">')
         # 項目の最後に句点が無ければ付ける。図の番号の説明は、同じ番号の中では改行しない
         self.assertEqual(dash.sentence_lines("<li>一。二</li>"), "<li>一。<br>二。</li>")

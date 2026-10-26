@@ -1,11 +1,31 @@
 #!/usr/bin/env python3
-"""Build a verified detailed report and complete search record.
+"""調べ終えたあとの詳細レポート（digest.html）を作る。解説と、検索の全記録の2層。
 
-Usage:
-    digest.py add <topic_dir> [--round N] [--by NAME]
-    digest.py <topic_dir> [--check]
+抜き書き（report.py）は原文を切り出して並べるだけで、その分野を知らない人には
+読む順も言葉の意味も分からない。詳細レポートは、止めたあとに初めて解説を書く場所で、
+読み手の水準ごとに Lv1（前提知識ゼロ）・Lv2（近い分野を知っている）・Lv3（この分野の専門）の3編を分けて置く。
+要約を止めていたのは早すぎる閉じ（Kuhlthau 1991）を避けるためなので、調べを止めた後なら書いてよい。
 
-Every explanatory sentence must include one or more exact source quotations.
+解説の1文ごとに、原文からそのまま切り出した文（ファイル・行）を根拠として付ける。
+根拠は report.py と同じ照合にかけ、1つでも合わない・根拠の無い文があれば HTML は作らない。
+記録の層は queries.jsonl（検索語ごとのヒットの全件）と fetch-log.jsonl（fetch.py の
+取得の記録）から機械で組み、エージェントは書かない。空振りの検索語もそのまま載る。
+
+使い方:
+    digest.py add <topic_dir> [--round N] [--by 誰]  … 標準入力の JSON を queries.jsonl に足す
+        JSON は記録の配列: [{"query", "method"?, "round"?, "by"?, "hits": [{"title", "url", "also"?}]}]
+        --round・--by は、記録に無いときの既定値
+    digest.py <topic_dir>          … digest.json と queries.jsonl → digest.html
+    digest.py <topic_dir> --check  … 照合だけして HTML は作らない
+
+digest.json の形:
+    {"title", "question", "stopped",
+     "claims"?: [{"claim", "status": "根拠あり|一部のみ|根拠なし"}],
+     "levels": {"lv1": 編, "lv2": 編, "lv3": 編},
+     "people_places": [文], "unresolved": ["..."]}
+    編 = {"summary": [文], "terms": [{"term", "sentences": [文]}], "answers": [{"claim", "sentences": [文]}],
+          "quiz"?: [{"q", "answer": [文]}]}
+    文 = {"text", "quotes": [{"file", "line", "end"?, "text"}]}
 """
 
 import base64
@@ -26,9 +46,9 @@ QUERIES = "queries.jsonl"
 FETCH_LOG = "fetch-log.jsonl"
 # 水準ごとに、読み手が知りたいことが違う。Lv1 は何が起きているか、Lv2 は仕組み、
 # Lv3 は仕組みを知っている人が次に知りたいこと（通説の修正・未決着・手法と数値・出典の食い違い）
-LEVELS = (("lv1", "Lv1", "No prior knowledge"),
-          ("lv2", "Lv2", "Related-field knowledge"),
-          ("lv3", "Lv3", "Field specialist"))
+LEVELS = (("lv1", "Lv1", "前提知識が無い人向け"),
+          ("lv2", "Lv2", "近い分野を知っている人向け"),
+          ("lv3", "Lv3", "この分野を専門にする人向け"))
 
 
 def append_records(topic: Path, records: list[dict]) -> int:
@@ -43,22 +63,22 @@ def append_records(topic: Path, records: list[dict]) -> int:
 def normalize_record(r: dict, round_: int | None, by: str | None) -> dict:
     """形を確かめてそろえる。query と hits が無い記録は受け付けない（空振りは hits を空の配列で書く）。"""
     if not isinstance(r, dict) or not isinstance(r.get("query"), str) or not r["query"].strip():
-        raise ValueError(f"record has no query: {json.dumps(r, ensure_ascii=False)[:80]}")
+        raise ValueError(f"query の無い記録: {json.dumps(r, ensure_ascii=False)[:80]}")
     hits = r.get("hits")
     if not isinstance(hits, list):
-        raise ValueError(f"hits is not an array (use [] for no hits): {r['query']}")
+        raise ValueError(f"hits が配列でない（空振りは []）: {r['query']}")
     out_hits = []
     for h in hits:
         if not isinstance(h, dict) or not isinstance(h.get("url"), str):
-            raise ValueError(f"hit has no url: {r['query']}")
+            raise ValueError(f"url の無いヒット: {r['query']}")
         hit = {"title": str(h.get("title") or ""), "url": h["url"]}
         if h.get("also"):
             hit["also"] = [str(u) for u in h["also"]]
         out_hits.append(hit)
     rnd = r.get("round", round_)
     if type(rnd) is not int:
-        raise ValueError(f"round is not an integer: {r['query']}")
-    return {"round": rnd, "by": str(r.get("by") or by or "unknown"),
+        raise ValueError(f"周（round）が整数でない: {r['query']}")
+    return {"round": rnd, "by": str(r.get("by") or by or "不明"),
             "method": str(r.get("method") or "WebSearch"), "query": r["query"], "hits": out_hits}
 
 
@@ -92,23 +112,23 @@ def sentence_problems(src: Path, where: str, sentences) -> list[str]:
     """文の並びを照合する。根拠の無い文・原文に無い引用を、場所つきで返す。"""
     bad = []
     if not isinstance(sentences, list) or not sentences:
-        return [f"{where}: no sentences"]
+        return [f"{where}: 文が無い"]
     for i, s in enumerate(sentences, 1):
         if not isinstance(s, dict) or not isinstance(s.get("text"), str) or not s["text"].strip():
-            bad.append(f"{where}, sentence {i}: no text")
+            bad.append(f"{where} {i}文目: text が無い")
             continue
         quotes = s.get("quotes")
         if not isinstance(quotes, list) or not quotes:
-            bad.append(f"{where}, sentence {i} ({s['text'][:30]}): no evidence quotation")
+            bad.append(f"{where} {i}文目「{s['text'][:30]}」: 根拠の引用が無い")
             continue
         for q in quotes:
             if not isinstance(q, dict) or not report.verify(src, q)[0]:
                 loc = f"{q.get('file')}:{q.get('line')}" if isinstance(q, dict) else "?"
-                bad.append(f"{where}, sentence {i} ({s['text'][:30]}): quotation not found in source {loc}")
+                bad.append(f"{where} {i}文目「{s['text'][:30]}」: 原文に見つからない引用 {loc}")
     return bad
 
 
-CLAIM_STATUS = ("supported", "partially supported", "unsupported")
+CLAIM_STATUS = ("根拠あり", "一部のみ", "根拠なし")
 SITES_SHOWN = 10
 
 
@@ -119,24 +139,24 @@ def check(topic: Path, data: dict) -> list[str]:
     for key, name, _ in LEVELS:
         lv = levels.get(key)
         if not isinstance(lv, dict):
-            bad.append(f"{name} is missing")
+            bad.append(f"{name}が無い")
             continue
-        bad += sentence_problems(src, f"{name} summary", lv.get("summary"))
+        bad += sentence_problems(src, f"{name}の要旨", lv.get("summary"))
         for t in lv.get("terms") or []:
-            bad += sentence_problems(src, f"{name} term {t.get('term')}", t.get("sentences"))
+            bad += sentence_problems(src, f"{name}の用語「{t.get('term')}」", t.get("sentences"))
         for a in lv.get("answers") or []:
-            bad += sentence_problems(src, f"{name} point {a.get('claim')}", a.get("sentences"))
+            bad += sentence_problems(src, f"{name}の論点「{a.get('claim')}」", a.get("sentences"))
         # 確かめる問いの答えも解説と同じく原文で裏づける。問いの文そのものは論点の答えを含まないので照合しない
         for q in lv.get("quiz") or []:
             if not isinstance(q, dict) or not str(q.get("q") or "").strip():
-                bad.append(f"{name} quiz: no question")
+                bad.append(f"{name}の問い: q が無い")
                 continue
-            bad += sentence_problems(src, f"{name} answer to {q['q'][:20]}", q.get("answer"))
+            bad += sentence_problems(src, f"{name}の問い「{q['q'][:20]}」の答え", q.get("answer"))
     for c in data.get("claims") or []:
         if not isinstance(c, dict) or report.OLD_STATUS.get(c.get("status"), c.get("status")) not in CLAIM_STATUS:
-            bad.append(f"claim status must be one of {', '.join(CLAIM_STATUS)}: {json.dumps(c, ensure_ascii=False)[:60]}")
+            bad.append(f"論点の状態は {'・'.join(CLAIM_STATUS)} のどれか: {json.dumps(c, ensure_ascii=False)[:60]}")
     if data.get("people_places"):
-        bad += sentence_problems(src, "people and venues", data["people_places"])
+        bad += sentence_problems(src, "人物と媒体", data["people_places"])
     return bad
 
 
@@ -163,7 +183,7 @@ def sentence_html(src: Path, s: dict) -> str:
     for q in s["quotes"]:
         _, ctx, c0, _ = report.verify(src, q)
         quotes.append(report.quote_html(src, q, ctx, c0))
-    return (f'<details class="s"><summary>{esc(s["text"])}<span class="mk">Sources {len(quotes)}</span></summary>'
+    return (f'<details class="s"><summary>{esc(s["text"])}<span class="mk">原文 {len(quotes)}</span></summary>'
             + "".join(quotes) + "</details>")
 
 
@@ -174,21 +194,21 @@ def sentences_html(src: Path, sentences: list[dict]) -> str:
 def level_html(src: Path, key: str, name: str, lead: str, lv: dict) -> str:
     # タブと同じ名前を本文の見出しに重ねない（同じ情報を二重に見せると負担になる）。読み上げ用にだけ残す
     body = [f'<section class="lv {key}" id="{key}"><h2 class="sr">{esc(name)}（{esc(lead)}）</h2>',
-            "<h3>Summary</h3>", sentences_html(src, lv["summary"])]
+            "<h3>要旨</h3>", sentences_html(src, lv["summary"])]
     if lv.get("terms"):
-        body.append("<h3>Terms</h3><dl>")
+        body.append("<h3>用語</h3><dl>")
         for t in lv["terms"]:
             body.append(f"<dt>{esc(t['term'])}</dt><dd>{sentences_html(src, t['sentences'])}</dd>")
         body.append("</dl>")
     if lv.get("answers"):
-        body.append("<h3>Research points</h3>")
+        body.append("<h3>論点ごとの解説</h3>")
         for a in lv["answers"]:
             body.append(f'<h4>{esc(a["claim"])}</h4>{sentences_html(src, a["sentences"])}')
     if lv.get("quiz"):
         # 自分で思い出してから答えを見る形にする。読み返すより、自分をテストするほうが定着する（Dunlosky ら 2013）
-        body.append('<h3>Check your understanding</h3>')
+        body.append('<h3>理解の確認</h3>')
         for q in lv["quiz"]:
-            body.append(f'<div class="quiz"><p class="q">{esc(q["q"])}</p><details class="ans"><summary>Show answer</summary>'
+            body.append(f'<div class="quiz"><p class="q">{esc(q["q"])}</p><details class="ans"><summary>答えを見る</summary>'
                         + sentences_html(src, q["answer"]) + "</details></div>")
     body.append("</section>")
     return "\n".join(body)
@@ -207,13 +227,13 @@ def levels_html(src: Path, data: dict) -> str:
 def overview_html(data: dict) -> str:
     """冒頭は3つに絞る: 調べたこと・調査を区切った理由・調査の論点ごとの根拠の有無。詳しいものは下へ（概観から詳細へ）。"""
     out = ['<dl class="overview">',
-           f"<dt>Question</dt><dd>{esc(data['question'])}</dd>",
-           f"<dt>Stop reason</dt><dd>{esc(data['stopped'])}</dd>"]
+           f"<dt>調べたこと</dt><dd>{esc(data['question'])}</dd>",
+           f"<dt>調査を区切った理由</dt><dd>{esc(data['stopped'])}</dd>"]
     if data.get("claims"):
         statuses = [report.OLD_STATUS.get(c["status"], c["status"]) for c in data["claims"]]
         items = "".join(f'<li><span class="st st{CLAIM_STATUS.index(st)}">{st}</span>{esc(c["claim"])}</li>'
                         for c, st in zip(data["claims"], statuses))
-        out.append(f'<dt>Research points</dt><dd><ul class="claims">{items}</ul></dd>')
+        out.append(f'<dt>調査の論点</dt><dd><ul class="claims">{items}</ul></dd>')
     out.append("</dl>")
     return "".join(out)
 
@@ -249,12 +269,12 @@ def sites_html(records: list[dict], fetched: dict[str, dict]) -> str:
     def table(items) -> str:
         rows = "".join(f'<tr><th scope="row">{esc(host)}</th><td class="bar"><span style="width:{n / peak * 100:.1f}%"></span></td>'
                        f"<td>{n}</td><td>{ok or ''}</td><td>{ng or ''}</td></tr>" for host, (n, ok, ng) in items)
-        return ('<div class="tablewrap"><table class="sites"><thead><tr><th>Site</th><th></th>'
-                '<th>Hits</th><th>Saved</th><th>Failed</th></tr></thead><tbody>' + rows + "</tbody></table></div>")
+        return ('<div class="tablewrap"><table class="sites"><thead><tr><th>サイト</th><th></th>'
+                '<th>ヒット</th><th>保存</th><th>失敗</th></tr></thead><tbody>' + rows + "</tbody></table></div>")
     # 先頭は上位の SITES_SHOWN 件だけ。残りは畳む（一度に見せる量を絞る）
-    out = "<h3>Referenced sites</h3>" + table(top[:SITES_SHOWN])
+    out = "<h3>参照したサイト</h3>" + table(top[:SITES_SHOWN])
     if len(top) > SITES_SHOWN:
-        out += f"<details><summary>{len(top) - SITES_SHOWN} more sites</summary>{table(top[SITES_SHOWN:])}</details>"
+        out += f"<details><summary>ほか {len(top) - SITES_SHOWN} サイト</summary>{table(top[SITES_SHOWN:])}</details>"
     return out
 
 
@@ -263,18 +283,18 @@ def records_html(records: list[dict], fetched: dict[str, dict]) -> str:
     linked = set()
     total_hits = sum(len(r["hits"]) for r in records)
     empty = sum(1 for r in records if not r["hits"])
-    body = ['<section class="sheet" id="record"><h2>Research record<span class="status">Generated</span></h2>',
-            f'<p class="note">Queries {len(records)} · hits {total_hits} · no-result queries {empty}</p>',
+    body = ['<section class="sheet" id="record"><h2>調査記録<span class="status">自動生成</span></h2>',
+            f'<p class="note">検索 {len(records)}本・ヒット {total_hits}件・空振り {empty}本</p>',
             sites_html(records, fetched),
-            "<h3>All results by query</h3>"]
+            "<h3>検索語別の全結果</h3>"]
     for rnd in sorted({r["round"] for r in records}):
         rs = [r for r in records if r["round"] == rnd]
         n_hits = sum(len(r["hits"]) for r in rs)
-        body.append(f"<details><summary>Round {esc(str(rnd))} (queries {len(rs)}, hits {n_hits})</summary>")
+        body.append(f"<details><summary>{esc(str(rnd))}周目（検索 {len(rs)}本・ヒット {n_hits}件）</summary>")
         for r in rs:
-            body.append(f'<h4>“{esc(r["query"])}”<span class="meta">{esc(r["by"])} · {esc(r["method"])}</span></h4>')
+            body.append(f'<h4>「{esc(r["query"])}」<span class="meta">{esc(r["by"])}・{esc(r["method"])}</span></h4>')
             if not r["hits"]:
-                body.append('<p class="note">0 hits</p>')
+                body.append('<p class="note">ヒット0</p>')
                 continue
             body.append("<ul class=\"hits\">")
             for h in r["hits"]:
@@ -282,19 +302,19 @@ def records_html(records: list[dict], fetched: dict[str, dict]) -> str:
                 if k:
                     linked.add(k)
                 if f is None:
-                    tag = '<span class="tag">Not fetched</span>'
+                    tag = '<span class="tag">未取得</span>'
                 elif f.get("status") == "OK":
-                    tag = f'<span class="tag ok">Saved</span><code>{esc(f.get("file", ""))}</code>'
+                    tag = f'<span class="tag ok">保存</span><code>{esc(f.get("file", ""))}</code>'
                 else:
-                    tag = f'<span class="tag ng">Fetch failed</span><span class="cn">{esc(f.get("reason", ""))}</span>'
+                    tag = f'<span class="tag ng">取得失敗</span><span class="cn">{esc(f.get("reason", ""))}</span>'
                 body.append(f"<li>{tag} {link(h['url'], h['title'])}</li>")
             body.append("</ul>")
         body.append("</details>")
     loose = [f for k, f in fetched.items() if k not in linked]
     if loose:
-        body.append('<h3>Sources fetched outside search results</h3><ul class="hits">')
+        body.append('<h3>検索結果以外から取得した原文</h3><ul class="hits">')
         for f in loose:
-            st = "Saved" if f.get("status") == "OK" else "Fetch failed"
+            st = "保存" if f.get("status") == "OK" else "取得失敗"
             detail = f.get("file", "") if f.get("status") == "OK" else f.get("reason", "")
             via = f'<span class="cn">{esc(f["via"])}</span>' if f.get("via") else ""
             body.append(f'<li><span class="tag">{st}</span> {link(f["url"], f["url"])} <code>{esc(detail)}</code>{via}</li>')
@@ -366,39 +386,39 @@ def build(topic: Path, check_only: bool) -> int:
     try:
         records = [normalize_record(r, None, None) for r in load_jsonl(topic / QUERIES)]
     except ValueError as e:
-        print(f"Could not read {topic / QUERIES}: {e}", file=sys.stderr)
+        print(f"{topic / QUERIES} を読めなかった: {e}", file=sys.stderr)
         return 1
     bad = check(topic, data)
     if bad:
-        print("Some sentences failed evidence verification (missing evidence or a quotation mismatch):")
+        print("根拠の照合に通らない文がある（根拠が無いか、引用が原文と合わない）:")
         print("\n".join("  " + b for b in bad))
         return 1
-    print(f"Verification OK: every explanatory sentence has a source quotation; {len(records)} query records")
+    print(f"照合 OK: 解説の文がすべて原文の引用を持つ・検索の記録 {len(records)}本")
     if check_only:
         return 0
 
     src = topic / "sources"
     fetched = fetch_status(load_jsonl(topic / FETCH_LOG))
     # 冒頭・解説・人物と媒体・未解決の点・調査記録を、それぞれ1枚の紙にする
-    nav = ['<a href="#explain">Explanation</a>']
+    nav = ['<a href="#explain">解説</a>']
     sections = [levels_html(src, data)]
     if data.get("people_places"):
-        sections.append('<section class="sheet" id="people"><h2>Key people and venues</h2>' + sentences_html(src, data["people_places"]) + "</section>")
-        nav.append('<a href="#people">People and venues</a>')
+        sections.append('<section class="sheet" id="people"><h2>主な人物と媒体</h2>' + sentences_html(src, data["people_places"]) + "</section>")
+        nav.append('<a href="#people">人物と媒体</a>')
     if data.get("unresolved"):
-        sections.append('<section class="sheet" id="open"><h2>Unresolved points</h2><ul>'
+        sections.append('<section class="sheet" id="open"><h2>未解決の点</h2><ul>'
                         + "".join(f"<li>{esc(u)}</li>" for u in data["unresolved"]) + "</ul></section>")
-        nav.append('<a href="#open">Unresolved points</a>')
+        nav.append('<a href="#open">未解決の点</a>')
     sections.append(records_html(records, fetched))
-    nav.append('<a href="#record">Research record</a>')
+    nav.append('<a href="#record">調査記録</a>')
     # 操作の案内は書かない（2026-10-21 かしぇ「長々と注釈や操作案内を書きたくない」）。調査記録が機械の生成であることは見出しの札が示す
     body = ['<section class="sheet">', f"<h1>{esc(data['title'])}</h1>", overview_html(data),
             "<nav>" + "".join(nav) + "</nav></section>"]
     body += sections
-    body.append(f'<footer>The imozuru detailed report and original sources are in {esc(src.name)}/ beside this page.</footer>')
+    body.append(f'<footer>imozuru の詳細レポート・原文はこのページと同じ場所の {esc(src.name)}/</footer>')
 
     # スクリプトは中身のハッシュで許可する（skin.page）。'unsafe-inline' にすると、原文から紛れ込んだ文字列も動きうる
-    page = skin.page(f"{data['title']} — Detailed report", "\n".join(body),
+    page = skin.page(f"{data['title']} 詳細レポート", "\n".join(body),
                      extra_head=f"<style>{CSS}</style>", scripts=(REMEMBER_JS,))
     out = topic / "digest.html"
     # 同じ場所に排他的に作り、仕込まれたリンクを踏まず、途中で止まっても前のページを残す
@@ -424,17 +444,17 @@ def add(argv: list[str]) -> int:
         elif flag == "--by" and rest:
             by = rest.pop(0)
         else:
-            print(f"Unknown option: {flag}", file=sys.stderr)
+            print(f"分からない指定: {flag}", file=sys.stderr)
             return 2
     try:
         raw = json.loads(sys.stdin.read() or "[]")
         records = [normalize_record(r, round_, by) for r in (raw if isinstance(raw, list) else [raw])]
     except ValueError as e:  # 壊れた JSON も ValueError
-        print(f"Could not add records: {e}", file=sys.stderr)
+        print(f"足せなかった: {e}", file=sys.stderr)
         return 1
     topic.mkdir(parents=True, exist_ok=True)
     n = append_records(topic, records)
-    print(f"Added {n} records to {topic / QUERIES} ({sum(len(r['hits']) for r in records)} hits)")
+    print(f"{n}本を {topic / QUERIES} に足した（ヒット {sum(len(r['hits']) for r in records)}件）")
     return 0
 
 

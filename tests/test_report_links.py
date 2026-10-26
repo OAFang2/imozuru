@@ -172,12 +172,6 @@ class QuoteHtmlTests(SourceUrlTests):
     def test_no_link_when_nothing_is_found(self):
         self.assertNotIn('class="src"', self.quote(file="nowhere.md"))
 
-    def test_simplified_chinese_translation_is_primary_with_legacy_fallback(self):
-        page = self.quote(text="An English quotation.", zh="一段英文引文。", ja="legacy")
-        self.assertIn('<blockquote lang="en">An English quotation.</blockquote>', page)
-        self.assertIn('<p class="tr" lang="zh-Hans"><span class="tag">Translation</span>一段英文引文。</p>', page)
-        self.assertNotIn("legacy", page)
-
 
 if __name__ == "__main__":
     unittest.main()

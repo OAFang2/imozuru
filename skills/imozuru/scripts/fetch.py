@@ -1,15 +1,20 @@
 #!/usr/bin/env python3
-"""Download one original source, verify it, and save it under sources/.
+"""原文を1本落とし、本物かどうか確かめてから sources/ に残す。
 
-YouTube captions are stored as timestamped Markdown without downloading video.
-X pages fail without fetching because their bodies require login. PMC articles
-are retrieved from Europe PMC full-text XML when needed.
+検索結果の URL は古いことが多く、2026-10-09 の試行では 11 本中 5 本が
+404・ログインの壁・PDF のふりをした HTML だった。拡張子や HTTP の成否では
+見分けられないので、中身の先頭と文字数で判定する。
 
-Usage:
+論文だけでなく個人の発信も落とす。YouTube は字幕を `[分:秒] 文` の形で
+.md にする（場所を時刻で指せるように）。X はログインの壁で本文が取れないので、
+取りに行かずに FAIL を返す。PMC の記事ページは captcha で取れないので、
+同じ本文を Europe PMC の全文 XML から取り、見出し・段落ごとの行の .md にする。
+
+使い方:
     fetch.py <sources_dir> <name> <url>
-Output (one tab-separated line):
-    OK   <name> <saved file> <character count> <first line>
-    FAIL <name> <reason>
+出力（標準出力に1行・タブ区切り）:
+    OK   <name> <保存したファイル> <文字数> <先頭の一行>
+    FAIL <name> <理由>
 """
 
 import codecs
@@ -34,15 +39,14 @@ from pathlib import Path
 from xml.parsers import expat
 
 # 本文として読める最低の文字数。404 ページや認証の壁は数百〜数千文字に収まる。
-# PDFs are commonly long English papers, so use a higher threshold. HTML uses a lower threshold
-# so that short Chinese and other CJK articles still pass.
+# PDF は英語の論文が多いので高め。HTML は日本語の短い記事を通すため低め
 # （大陸塗りの試行で 2,904 字の本物の記事が 3,000 の下限で落ちた）。
 MIN_TEXT_CHARS = 3000
 MIN_HTML_CHARS = 1000
-# Chinese and other CJK PDFs can contain substantive text with fewer characters than English.
-# When the share of CJK characters exceeds this ratio, use the HTML threshold.
+# 和文（日本語・中国語）の PDF は、英語より少ない字数で中身がある。
+# 本文の空白以外の字のうち和文の字がこの割合を超える PDF は、HTML と同じ下限で判定する。
 CJK_RATIO_FOR_PDF = 0.3
-# CJK characters: kana, Han characters, and full-width letters, numbers, and punctuation.
+# 和文の字＝かな・漢字・全角の英数字と記号
 _CJK = re.compile(r"[\u3000-\u30ff\u3400-\u9fff\uf900-\ufaff\uff00-\uffef]")
 MAX_BYTES = 40_000_000
 # 外のコマンド（pdftotext・pdftoppm・tesseract・ax・yt-dlp）1回の時間の上限（秒）。
@@ -56,9 +60,8 @@ OCR_MAX_PAGES = 60
 # 2026-10-21 の計測: 和書のスキャンを eng で読むと 18〜25、jpn で読むと 72〜82。
 # 英語の古い論文（1987・1993）は 87〜96。合成した縦書き・横書きの和文も同じ分かれ方をした。
 OCR_MIN_CONFIDENCE = 50
-# Add installed language data in preference order: Simplified and Traditional Chinese first;
-# Japanese horizontal/vertical packs remain optional compatibility choices (#11).
-OCR_EXTRA_LANGS = ("chi_sim", "chi_tra", "jpn", "jpn_vert")
+# 入っていれば自動で足す言語データ。jpn だけでは縦書きが、jpn_vert だけでは横書きが読めない（#11）
+OCR_EXTRA_LANGS = ("jpn", "jpn_vert")
 # IMOZURU_OCR_LANG で受け付ける形（eng・jpn+eng など）。tesseract の引数に入るので、ほかの字は通さない
 OCR_LANG_FORM = re.compile(r"[A-Za-z_]+(\+[A-Za-z_]+)*")
 # 本文ではなく壁に当たったと分かる言い回し。小文字で照合する。
@@ -94,7 +97,7 @@ class _Redirect308(urllib.request.HTTPRedirectHandler):
         fp.close()
         problem = url_problem(newurl)
         if problem:
-            raise UnsafeURL(f"redirect target {newurl}: {problem}")
+            raise UnsafeURL(f"転送先 {newurl}: {problem}")
         return super().redirect_request(req, fp, 307 if code == 308 else code, msg, headers, newurl)
 
 
@@ -139,12 +142,12 @@ def _pinned_connection(host: str, port: int, timeout, source_address):
     try:
         addrs = list(resolve(host))
     except (OSError, UnicodeError, ValueError) as e:
-        raise UnsafeURL(f"cannot resolve host ({e})")
+        raise UnsafeURL(f"ホストを引けない（{e}）")
     if os.environ.get("IMOZURU_ALLOW_PRIVATE") != "1":
         for addr in addrs:
             for ip in _addresses_inside(ipaddress.ip_address(addr.split("%", 1)[0])):
                 if not ip.is_global:
-                    raise UnsafeURL(f"destination resolved to a local or private address immediately before connection ({ip})")
+                    raise UnsafeURL(f"つなぐ直前に引いた先が手元や内側の宛先（{ip}）だった")
     err = None
     full = _real_timeout(timeout)
     order = _connect_order(addrs)
@@ -171,7 +174,7 @@ def _pinned_connection(host: str, port: int, timeout, source_address):
             return _dial(addr, port, timeout, source_address)
         except OSError as e:
             err = e
-    raise err or OSError(f"no address found for {host}")
+    raise err or OSError(f"{host} の宛先が無い")
 
 
 class _PinnedMixin:
@@ -246,24 +249,24 @@ def url_problem(url: str) -> str | None:
         p = urllib.parse.urlsplit(url)
         host = p.hostname
     except ValueError:
-        return "malformed URL"
+        return "URL の形が壊れている"
     if p.scheme.lower() not in {"http", "https"}:
-        return "only http(s) URLs may be fetched"
+        return "http(s) の URL だけを取りに行く"
     if not host:
-        return "URL has no host"
+        return "URL にホストが無い"
     if "@" in p.netloc or "%" in p.netloc:
-        return "URL host contains @ or %"
+        return "URL のホストに「@」か「%」が入っている"
     if os.environ.get("IMOZURU_ALLOW_PRIVATE") == "1":
         return None
     try:
         addrs = resolve(host)
     except (OSError, UnicodeError, ValueError) as e:
-        return f"cannot resolve host ({e})"
+        return f"ホストを引けない（{e}）"
     for addr in addrs:
         for ip in _addresses_inside(ipaddress.ip_address(addr.split("%", 1)[0])):  # IPv6 の %eth0 を外す
             if not ip.is_global:
-                return (f"refusing local or private address ({ip}); "
-                        "IMOZURU_ALLOW_PRIVATE=1 disables this check for VPN environments that resolve public names privately")
+                return (f"手元や内側の宛先（{ip}）には取りに行かない"
+                        "（VPN などで外の名前も内側に引ける環境なら IMOZURU_ALLOW_PRIVATE=1 で外せる）")
     return None
 
 
@@ -322,9 +325,9 @@ def download(url: str, user_agent: str = BROWSER_UA) -> tuple[bytes, str]:
     with _OPENER.open(req, timeout=90) as res:
         body = res.read(MAX_BYTES + 1)
         if len(body) > MAX_BYTES:
-            raise ValueError(f"body exceeds {MAX_BYTES:,} bytes")
+            raise ValueError(f"本体が {MAX_BYTES:,} バイトを超える")
         if isinstance(res.length, int) and res.length > 0:
-            raise ValueError("body was truncated")
+            raise ValueError("本体が途中で切れた")
         return body, res.headers.get("Content-Type", "")
 
 
@@ -481,19 +484,18 @@ def pdf_to_text(pdf: Path) -> str:
 
 
 def ocr_langs() -> str:
-    """Choose Tesseract languages.
+    """tesseract に渡す言語。IMOZURU_OCR_LANG があればそれ、無ければ入っている言語データから選ぶ。
 
-    IMOZURU_OCR_LANG overrides automatic selection. Otherwise start with English and append
-    installed packs in OCR_EXTRA_LANGS order: chi_sim, chi_tra, then optional Japanese packs.
-    If the installed-language list cannot be read, retain the established eng-only fallback.
-    Match complete lines so jpn is not confused with jpn_vert; older Tesseract releases may
-    print their language list to stderr, so inspect both streams.
+    jpn と jpn_vert が入っていれば eng に足す。英語の論文を3つで読んでも確信度は下がらなかった
+    （2026-10-21 の計測）。一覧の読み取りに失敗したら eng だけにする＝前と同じ動き。
+    一覧は行ごとに名前と完全に一致するかで見る（「jpn_vert」の行を「jpn」と取り違えない）。
+    古い tesseract は一覧を標準エラーに出すので両方を読む。
     """
     chosen = os.environ.get("IMOZURU_OCR_LANG", "").strip()
     if chosen:
         if OCR_LANG_FORM.fullmatch(chosen):
             return chosen
-        print(f"Ignoring malformed IMOZURU_OCR_LANG: {clean(chosen)}", file=sys.stderr)
+        print(f"IMOZURU_OCR_LANG の形が違うので使わない: {clean(chosen)}", file=sys.stderr)
     res = run_tool(["tesseract", "--list-langs"], capture_output=True, encoding="utf-8", errors="replace")
     have = set() if res is None else {line.strip() for line in f"{res.stdout}\n{res.stderr}".splitlines()}
     return "+".join([lang for lang in OCR_EXTRA_LANGS if lang in have] + ["eng"])
@@ -518,10 +520,10 @@ def ocr_pdf(pdf: Path) -> tuple[str, str]:
         done = run_tool(["pdftoppm", "-r", "200", "-l", str(OCR_MAX_PAGES), "-png", str(pdf), str(tmp / "p")],
                         stderr=subprocess.DEVNULL)
         if done is None:
-            return "", "timed out while rendering the PDF as images"
+            return "", "PDF を画像にする途中で時間切れ"
         # 途中で落ちると、書き出せたページの画像だけが残る。残りを OCR すると欠けた本文が成功扱いになる（#14）
         if done.returncode != 0:
-            return "", f"failed while rendering the PDF as images (pdftoppm exit code {done.returncode})"
+            return "", f"PDF を画像にする途中で失敗（pdftoppm の終了コード {done.returncode}）"
         langs = ocr_langs()
         pages, failed, weighted, chars = [], [], 0.0, 0
         for img in sorted(tmp.glob("p-*.png")):
@@ -553,11 +555,10 @@ def ocr_pdf(pdf: Path) -> tuple[str, str]:
             leftover.unlink()
         tmp.rmdir()
     if failed:
-        return "", f"OCR could not read pages {','.join(failed)}"
+        return "", f"OCR で読めなかったページがある（{','.join(failed)}）"
     if chars and weighted / chars < OCR_MIN_CONFIDENCE:
-        return "", (f"OCR confidence is low (average {weighted / chars:.0f}; languages {langs}). "
-                    "The language data may not match (for Chinese, install chi_sim and optionally chi_tra; "
-                    "Japanese packs jpn and jpn_vert are optional)")
+        return "", (f"OCR の確信度が低い（平均 {weighted / chars:.0f}・言語 {langs}）。"
+                    "言語データが合っていないかも（日本語なら tesseract の jpn と jpn_vert）")
     return "\n".join(pages), ""
 
 
@@ -572,8 +573,8 @@ def ocr_if_longer(pdf: Path, text: str) -> tuple[str, str]:
     if len(ocr.strip()) <= len(text.strip()):
         return text, note
     pdf.with_suffix(".txt").write_text(
-        f"(OCR text. Pages after {OCR_MAX_PAGES} were not processed. "
-        "OCR errors may remain; verify quotations against the original PDF.)\n\n" + ocr, encoding="utf-8")
+        f"（OCR で起こした本文。{OCR_MAX_PAGES} ページを超える分は起こしていない。"
+        "誤りが残るので、引用は原本の PDF で確かめる）\n\n" + ocr, encoding="utf-8")
     return ocr, ""
 
 
@@ -746,21 +747,26 @@ def arxiv_id(url: str) -> str | None:
 
 
 def youtube_to_md(url: str, out: Path) -> str:
-    """Download captions only (never video) and convert them to timestamped text.
+    """yt-dlp で字幕だけ落とし（動画は落とさない）、時刻つきの本文にする。
 
-    Prefer manual English and Chinese captions. If none exist, request only the video's
-    original-language automatic captions and remove repeated adjacent cues. Record whether
-    captions are manual or automatic so readers know when to verify a quotation against video.
+    手動の字幕を優先し（日本語→英語の順）、無ければ動画の元の言語の自動字幕。自動字幕は同じ文が
+    次の区間にも繰り返し出るので、直前と同じ文は捨てる。
 
-    Do not request machine-translated automatic captions: yt-dlp can receive a YouTube 429 on
-    the translated track and stop before preserving the original track. The manual pass also
-    obtains the spoken-language metadata; the automatic pass requests only that language's
-    ``-orig`` track. If it is unknown, fall back to ``en-orig,zh-orig``. Explicit UTF-8 output
-    avoids cp932 metadata output on Windows.
+    自動字幕は誤変換が多い（大陸塗りの試行で「線画」が「洗画」）。どちらを使ったかを
+    見出しに残し、読み手が引用を動画で確かめるべきか分かるようにする。手動と自動は
+    同じファイル名で出てくるので、まず手動だけで取り、無いときだけ自動で取り直す。
+    題名の出力は --encoding で UTF-8 に決める。Windows でパイプに出すと、決めない限り cp932 になる。
+
+    自動字幕は、動画の元の言語のもの（en-orig など）だけを取る。ja,en を指定すると、
+    英語の動画では ja が機械翻訳の字幕になり、YouTube はそれに 429 Too Many Requests を返す。
+    yt-dlp はそこで止まり、英語の字幕も残さない（テスラの自動運転の試行で YouTube が3本とも
+    落ちた・2026-10-19）。ja-orig,en-orig の指定でも足りない。AI の吹き替えが付いた動画では
+    吹き替えの音声にも ja-orig が付き、中身は翻訳になる（CVPR の講演 jPCV4GKX9Dw）。そこで手動の回で
+    動画の言語（元の音声の言語）も出させ、自動の回ではその言語の -orig だけを指定する。
     """
     tmp = out.parent / f".{out.stem}-subs"
     tmp.mkdir(exist_ok=True)
-    kind, langs = "manual", "en,zh,zh-Hans,zh-Hant"
+    kind, langs = "手動", "ja,en"
     printed = ""
     for flag in ("--write-subs", "--write-auto-subs"):
         meta = run_tool(
@@ -775,13 +781,13 @@ def youtube_to_md(url: str, out: Path) -> str:
         printed = meta.stdout
         if any(tmp.glob("*.vtt")):
             break
-        kind = "automatic (may contain errors; verify quotations against the video)"
-        # Metadata may say en-US while the caption is en-orig. If unknown, prefer original English and Chinese.
+        kind = "自動（誤変換あり・引用は動画で確かめる）"
+        # 言語は en-US のように地域つきで来るが、字幕は en-orig。分からなければ日本語か英語の元の字幕
         spoken = printed.rstrip("\n").split("\t")[-1].split("-")[0]
         # 言語の名乗りは動画の持ち主が決める。「all」などで字幕を全部落とさせないよう、言語の形だけ通す
-        langs = f"{spoken}-orig" if re.fullmatch(r"[a-z]{2,3}", spoken) else "en-orig,zh-orig"
+        langs = f"{spoken}-orig" if re.fullmatch(r"[a-z]{2,3}", spoken) else "ja-orig,en-orig"
     vtts = sorted((p for p in tmp.glob("*.vtt") if p.stat().st_size <= MAX_BYTES),
-                  key=lambda p: (not any(tag in p.name for tag in (".en", ".zh-Hans", ".zh-Hant", ".zh")), p.name))
+                  key=lambda p: (".ja" not in p.name, p.name))
     lines, last = [], ""
     if vtts:
         stamp = "00:00"
@@ -805,7 +811,7 @@ def youtube_to_md(url: str, out: Path) -> str:
     title = head[0] if head and head[0] else url
     info = " / ".join(head[1:3]) if len(head) > 1 else ""
     body = "\n".join(lines)
-    out.write_text(f"# {title}\n\n{url}\n{info}\nCaptions: {kind + ' ' + vtts[0].name if vtts else 'none'}\n\n{body}\n",
+    out.write_text(f"# {title}\n\n{url}\n{info}\n字幕: {kind + ' ' + vtts[0].name if vtts else 'なし'}\n\n{body}\n",
                    encoding="utf-8")
     return body
 
@@ -890,7 +896,7 @@ def _jats_blocks(el, level: int, out: list[str]) -> None:
         elif tag in ("list",):
             out += ["- " + _jats_flat(item) for item in child if _local(item.tag) == "list-item"]
         elif tag in ("fig", "table-wrap", "supplementary-material"):
-            label = _jats_flat(child.find("label")) or {"fig": "Figure", "table-wrap": "Table"}.get(tag, "Supplement")
+            label = _jats_flat(child.find("label")) or {"fig": "図", "table-wrap": "表"}.get(tag, "補足")
             caption = _jats_flat(child.find("caption"))
             out.append(f"[{label}] {caption}".rstrip())
             for row in child.iter():
@@ -918,7 +924,7 @@ def jats_to_md(xml: bytes, url: str, xml_url: str) -> str:
     （2026-10-19 の試しで Dully 2021 など）。題名と書誌は頭の数行にまとめ、本文は行番号で指せる形にする。
     """
     def refuse_entity(*args):
-        raise ValueError("XML declares an ENTITY")
+        raise ValueError("XML が ENTITY を宣言している")
 
     count = depth = 0
 
@@ -927,7 +933,7 @@ def jats_to_md(xml: bytes, url: str, xml_url: str) -> str:
         count += 1
         depth += 1
         if count > JATS_MAX_ELEMENTS or depth > JATS_MAX_DEPTH:
-            raise ValueError("XML element count or nesting depth exceeds the limit")
+            raise ValueError("XML の要素数か深さが上限を超えた")
 
     def end(tag):
         nonlocal depth
@@ -949,7 +955,7 @@ def jats_to_md(xml: bytes, url: str, xml_url: str) -> str:
     requested = pmc_id(url)
     if requested and any(not re.fullmatch(r"(?:PMC)?" + requested[3:], (a.text or "").strip(), re.I)
                          for a in meta.findall("article-id") if a.get("pub-id-type") == "pmcid"):
-        raise ValueError("XML PMCID does not match the requested article")
+        raise ValueError("XML の PMCID が要求した記事と違う")
     authors = []
     for contrib in meta.iter("contrib"):
         if contrib.get("contrib-type") != "author":
@@ -959,13 +965,13 @@ def jats_to_md(xml: bytes, url: str, xml_url: str) -> str:
                                               _jats_flat(name.find("surname"))]))
                        if name is not None else _jats_flat(contrib.find("collab")))
     out = [f"# {_jats_flat(meta.find('title-group/article-title')) or url}", "", url,
-           f"Full text: Europe PMC XML ({xml_url})",
+           f"本文: Europe PMC の全文 XML（{xml_url}）",
            " / ".join(filter(None, [journal, year, ids.get("doi") and f"https://doi.org/{ids['doi']}",
                                     ids.get("pmcid")])),
-           "Authors: " + ", ".join(a for a in authors if a)]
+           "著者: " + ", ".join(a for a in authors if a)]
     keywords = [_jats_flat(k) for k in meta.iter("kwd")]
     if keywords:
-        out.append("Keywords: " + ", ".join(keywords))
+        out.append("キーワード: " + ", ".join(keywords))
     # 要旨は article-meta の中にあるので、見出しつきの節として本文・巻末と同じ流れに乗せる
     parts = ET.Element("article")
     parts.extend([*meta.findall("abstract"), *meta.findall("trans-abstract"),
@@ -1045,7 +1051,7 @@ def valid_source_name(name: str) -> bool:
 def fetch_source(sources: Path, name: str, url: str, destination: Path) -> int:
     """sources は今回の取得専用の一時置き場。取得・変換・検査中は保存済みの原文に触れない。"""
     if not valid_source_name(name):
-        print(f"FAIL\t{name!r}\tsource name must be a single filename")
+        print(f"FAIL\t{name!r}\t原文の名前は単一のファイル名にする")
         return 1
     # file:// や手元の宛先を渡すと、urllib が手元のファイルやサービスの中身を sources/ に写してしまう。
     # ax と yt-dlp に渡す前にもここで止める（両者がたどる転送の先までは見られない）
@@ -1055,17 +1061,17 @@ def fetch_source(sources: Path, name: str, url: str, destination: Path) -> int:
         return 1
 
     if X_POST.match(url):
-        print(f"FAIL\t{name}\tX requires login; keep the URL in map.md")
+        print(f"FAIL\t{name}\tX はログインの壁で本文が取れない（URL を map.md に残す）")
         return 1
     if is_youtube(url):
         if missing("yt-dlp"):
-            print(f"FAIL\t{name}\tyt-dlp is missing, so captions cannot be downloaded")
+            print(f"FAIL\t{name}\tyt-dlp が無いので字幕を落とせない")
             return 1
         kept = sources / f"{name}.md"
         body = youtube_to_md(url, kept)
         if len(body) < MIN_TRANSCRIPT_CHARS:
             kept.unlink(missing_ok=True)
-            print(f"FAIL\t{name}\tmissing or too-short captions ({len(body)} characters)")
+            print(f"FAIL\t{name}\t字幕が無いか短すぎる（{len(body)}文字）")
             return 1
         kept = save_verified(kept, kept, destination)
         print(f"OK\t{name}\t{kept}\t{len(body)}\t{first_line(body)}")
@@ -1079,8 +1085,8 @@ def fetch_source(sources: Path, name: str, url: str, destination: Path) -> int:
         try:
             text = jats_to_md(download(xml_url)[0], url, xml_url)
         except Exception as e:  # 全文が無い（OA でない）と 404 などが返る。XML が壊れていても同じく取れない
-            print(f"FAIL\t{name}\tEurope PMC has no full-text XML ({type(e).__name__}: {clean(str(e))}); "
-                  "PMC uses a captcha, so ask the user to open it in a browser")
+            print(f"FAIL\t{name}\tEurope PMC に全文 XML が無い（{type(e).__name__}: {clean(str(e))}）。"
+                  "PMC は captcha なので、ブラウザで開いてもらう候補")
             return 1
         kept = saved = sources / f"{name}.md"
         kept.write_text(text, encoding="utf-8")
@@ -1098,7 +1104,7 @@ def fetch_source(sources: Path, name: str, url: str, destination: Path) -> int:
     if not body.strip():
         # 中身の無い 200/202 を返すサーバーがある（Cornell の論文置き場・2026-10-10）。
         # ブラウザでないと中身を渡さないボット対策のことが多い＝ユーザーのブラウザで開いてもらう候補
-        print(f"FAIL\t{name}\tempty response (possibly bot protection; a normal browser may work)")
+        print(f"FAIL\t{name}\t空の応答（ボット対策の可能性・ブラウザで開けば読めるかも）")
         return 1
     if body[:5] == b"%PDF-":
         saved = sources / f"{name}.pdf"
@@ -1141,10 +1147,10 @@ def fetch_source(sources: Path, name: str, url: str, destination: Path) -> int:
             pdf.unlink(missing_ok=True)
             if text.lstrip().startswith("%PDF"):
                 kept.unlink(missing_ok=True)
-                print(f"FAIL\t{name}\tcould not save the redirected PDF")
+                print(f"FAIL\t{name}\t転送先の PDF を保存できなかった")
                 return 1
     else:
-        print(f"FAIL\t{name}\tunsupported format: {ctype or 'unknown'}")
+        print(f"FAIL\t{name}\t扱えない形式: {ctype or '不明'}")
         return 1
 
     # arXiv の PDF は pdftotext で本文が0文字になることがある（2026-10-09 の試行で
@@ -1180,13 +1186,13 @@ def verify_and_save(name: str, text: str, saved: Path, kept: Path, destination: 
     if len(text) < floor or (wall and len(text) < MIN_TEXT_CHARS * 4):
         for p in (saved, kept):
             p.unlink(missing_ok=True)
-        reason = f"access wall detected ({wall})" if wall else f"body is too short ({len(text)} characters)"
+        reason = f"壁に当たった（{wall}）" if wall else f"本文が短すぎる（{len(text)}文字）"
         # PDF の文字起こしに要るコマンドが欠けていたなら、短い理由はたいていそれ
         lacking = missing("pdftotext", "pdftoppm", "tesseract") if saved.suffix == ".pdf" else []
         if lacking:
-            reason += f"; missing {'/'.join(lacking)}"
+            reason += f"。{'・'.join(lacking)} が無い"
         elif ocr_note and saved.suffix == ".pdf":
-            reason += f"; {ocr_note}"
+            reason += f"。{ocr_note}"
         print(f"FAIL\t{name}\t{reason}")
         return 1
 
@@ -1201,7 +1207,7 @@ def main() -> int:
         return 2
     sources, name, url = Path(sys.argv[1]), sys.argv[2], sys.argv[3]
     if not valid_source_name(name):
-        print(f"FAIL\t{name!r}\tsource name must be a single filename")
+        print(f"FAIL\t{name!r}\t原文の名前は単一のファイル名にする")
         return 1
     sources.mkdir(parents=True, exist_ok=True)
     # 変換や FAIL の後始末は一時置き場だけで行う。同名の原文を検査前に上書きしない。

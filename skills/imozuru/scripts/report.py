@@ -1,14 +1,25 @@
 #!/usr/bin/env python3
-"""Verify extracts against original sources and build report.html.
+"""抜き書き（extracts.json）を、原文どおりか確かめてから読むためのページ（report.html）にする。
 
-Usage:
-    report.py <topic_dir>
-    report.py <topic_dir> --check
+原文を40本落としても、英語の PDF や1時間の字幕のままでは読まれずに終わる。
+かといってエージェントが要約すると「早すぎる閉じ」に戻る。間を取るのが Ellis の
+extracting＝抜き書き。論点ごとに原文をそのまま切り出して並べ、エージェントが書くのは
+見出し・「見つからなかった」・英語の訳だけにする。
 
-extracts.json uses ``supported|partially supported|unsupported`` statuses.
-Quotes contain file, line, optional end, exact text, optional Simplified
-Chinese translation ``zh``, mark, context_note, and url. Legacy ``ja``
-translations and Japanese status values remain readable.
+言い換えが紛れ込まないよう、抜き書きの文が原文の指定の行にそのまま在るかを機械で確かめる。
+1つでも見つからなければ HTML は作らず、どれが合わないかを出して止まる。
+
+使い方:
+    report.py <topic_dir>         … <topic_dir>/extracts.json → <topic_dir>/report.html
+    report.py <topic_dir> --check … 照合だけして HTML は作らない
+
+extracts.json の形（例はリポジトリの examples/demo/extracts.json）:
+    {"title", "question", "stopped",
+     "claims": [{"claim", "status": "根拠あり|一部のみ|根拠なし", "note"?,
+                 "quotes": [{"file", "line", "end"?, "text", "ja"?, "mark"?, "context_note"?, "url"?}]}],
+     "disagreements"?: [{"topic", "quotes": [{..., "who"}]}],
+     "unreached"?: ["..."]}
+引用の元のページへのリンクは "url" か、無ければ map.md の「原文（sources/）」の表の「元の URL」か取得の記録（fetch-log.jsonl）から付ける。
 """
 
 import fnmatch
@@ -26,8 +37,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import skin  # noqa: E402  見た目（コルク板と象牙の紙）と色は skin.py・palette.py の1か所に置く
 
 # 2026-10-21 まで使っていた状態の言葉。前に書いた extracts.json も読めるよう、新しい言葉に読み替える
-OLD_STATUS = {"付いた": "supported", "一部だけ": "partially supported", "付かなかった": "unsupported",
-              "根拠あり": "supported", "一部のみ": "partially supported", "根拠なし": "unsupported"}
+OLD_STATUS = {"付いた": "根拠あり", "一部だけ": "一部のみ", "付かなかった": "根拠なし"}
 
 # 前後に見せる行数。抜き書きがどんな流れの中にあったかを、ページの中で開いて確かめられるように。
 CONTEXT_LINES = 6
@@ -149,11 +159,9 @@ def _source_rows(map_path: str, _mtime: int) -> tuple:
     rows = []
     for head in re.finditer(r"^\|[^\n]*\|[ \t]*$", text, re.M):
         cols = [c.strip() for c in head.group(0).strip().strip("|").split("|")]
-        file_head = "File" if "File" in cols else "ファイル" if "ファイル" in cols else None
-        url_head = "Original URL" if "Original URL" in cols else "元の URL" if "元の URL" in cols else None
-        if not file_head or not url_head:
+        if "ファイル" not in cols or "元の URL" not in cols:
             continue
-        fi, ui = cols.index(file_head), cols.index(url_head)
+        fi, ui = cols.index("ファイル"), cols.index("元の URL")
         # 見出しの次の行は区切り（|---|）。表が終わる（| で始まらない行）まで読む。
         # 区切りの行と最初の行のあいだに空行を挟んだ map.md があったので、空行は飛ばす
         for line in text[head.end():].lstrip("\n").split("\n")[1:]:
@@ -254,19 +262,18 @@ def quote_html(src_dir: Path, q: dict, ctx: list[str], c0: int) -> str:
     if q.get("who"):
         parts.append(f'<div class="who">{esc(q["who"])}</div>')
     parts.append(f'<blockquote{skin.lang_attr(q["text"])}>{esc(q["text"])}</blockquote>')
-    translation = q.get("zh") or q.get("ja")
-    if translation:
-        parts.append(f'<p class="tr" lang="zh-Hans"><span class="tag">Translation</span>{esc(translation)}</p>')
+    if q.get("ja"):
+        parts.append(f'<p class="ja"><span class="tag">訳</span>{esc(q["ja"])}</p>')
     meta = [f'<code>{esc(loc)}</code>']
     url = link_url(q.get("url")) or source_url(src_dir, q["file"])
     if url:
-        meta.append(f'<a class="src" href="{esc(url)}" target="_blank" rel="noopener noreferrer">Open original page{OUT_ICON}</a>')
+        meta.append(f'<a class="src" href="{esc(url)}" target="_blank" rel="noopener noreferrer">元のページを開く{OUT_ICON}</a>')
     if q.get("mark"):
         meta.append(f'<span class="mark">{esc(q["mark"])}</span>')
     if q.get("context_note"):
         meta.append(f'<span class="cn">{esc(q["context_note"])}</span>')
     parts.append(f'<figcaption>{" ".join(meta)}</figcaption>')
-    parts.append(f'<details><summary>Read context (lines {c0}–{c0 + len(ctx) - 1})</summary><pre{skin.lang_attr(" ".join(ctx))}>{ctx_html}</pre></details>')
+    parts.append(f'<details><summary>前後を読む（{c0}〜{c0 + len(ctx) - 1}行）</summary><pre{skin.lang_attr(" ".join(ctx))}>{ctx_html}</pre></details>')
     parts.append("</figure>")
     return "\n".join(parts)
 
@@ -282,7 +289,7 @@ h2{font-size:1.2rem;margin:0 0 .4rem}
 .quote{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:1rem 1.1rem;margin:1rem 0}
 blockquote{margin:0;padding-left:.9rem;border-left:3px solid var(--accent);white-space:pre-wrap}
 .who{font-weight:600;margin-bottom:.4rem}
-.tr{margin:.6rem 0 0;color:var(--sub)}
+.ja{margin:.6rem 0 0;color:var(--sub)}
 .tag{font-size:.75rem;border:1px solid var(--sub);border-radius:4px;padding:0 .3rem;margin-right:.4rem}
 figcaption{margin-top:.6rem;font-size:.8rem;color:var(--sub);display:flex;flex-wrap:wrap;gap:.5rem}
 figcaption a.src{display:inline-flex;align-items:center;gap:.25rem;color:inherit;white-space:nowrap}
@@ -318,22 +325,22 @@ def main() -> int:
                 bad.append(f"{q['file']}:{q['line']}  「{q['text'][:40]}…」")
             rendered[id(q)] = (ctx, c0)
     if bad:
-        print("Some extracts were not found in the original source (paraphrase or shifted line numbers):")
+        print("原文に見つからない抜き書きがある（言い換えか、行番号のずれ）:")
         print("\n".join("  " + b for b in bad))
         return 1
     total = sum(len(g.get("quotes", [])) for _, g in groups)
-    print(f"Verification OK: all {total} extracts match the original sources")
+    print(f"照合 OK: 抜き書き {total} 件がすべて原文のとおり")
     if check_only:
         return 0
 
     # 冒頭と、論点ごとに1枚ずつの紙にする
     body = ['<section class="sheet">', f"<h1>{esc(data['title'])}</h1>",
-            f'<p class="lead">Question: {esc(data["question"])}</p>',
-            f'<p class="lead">Stop reason: {esc(data["stopped"])}</p>',
+            f'<p class="lead">調べたこと: {esc(data["question"])}</p>',
+            f'<p class="lead">調査を区切った理由: {esc(data["stopped"])}</p>',
             "</section>"]
     for c in data["claims"]:
         status = OLD_STATUS.get(c["status"], c["status"])
-        cls = "status none" if status == "unsupported" else "status"
+        cls = "status none" if status == "根拠なし" else "status"
         body.append(f'<section class="sheet"><h2>{esc(c["claim"])}<span class="{cls}">{esc(status)}</span></h2>')
         if c.get("note"):
             body.append(f'<p class="note">{esc(c["note"])}</p>')
@@ -342,18 +349,18 @@ def main() -> int:
             body.append(quote_html(src, q, ctx, c0))
         body.append("</section>")
     for d in data.get("disagreements", []):
-        body.append(f'<section class="sheet"><h2>Disagreement: {esc(d["topic"])}</h2>')
+        body.append(f'<section class="sheet"><h2>食い違い: {esc(d["topic"])}</h2>')
         for q in d.get("quotes", []):
             ctx, c0 = rendered[id(q)]
             body.append(quote_html(src, q, ctx, c0))
         body.append("</section>")
     if data.get("unreached"):
-        body.append('<section class="sheet"><h2>Unreached material</h2><ul class="unreached">'
+        body.append('<section class="sheet"><h2>届かなかったもの</h2><ul class="unreached">'
                     + "".join(f"<li>{esc(u)}</li>" for u in data["unreached"]) + "</ul></section>")
     # 絶対パスはページを人に渡すと手元のユーザー名を漏らすので、ページからの相対で書く
-    body.append(f'<footer>imozuru extracts and original sources are in {esc(src.name)}/ beside this page.</footer>')
+    body.append(f'<footer>imozuru の抜き書き・原文はこのページと同じ場所の {esc(src.name)}/</footer>')
 
-    page = skin.page(f"{data['title']} — Extracts", "\n".join(body), extra_head=f"<style>{CSS}</style>")
+    page = skin.page(f"{data['title']} 抜き書き", "\n".join(body), extra_head=f"<style>{CSS}</style>")
     out = topic / "report.html"
     # 同じ場所に排他的に作り、仕込まれたリンクを踏まず、途中で止まっても前のページを残す
     fd, tmp = tempfile.mkstemp(prefix=".report.html.", suffix=".tmp", dir=out.parent)

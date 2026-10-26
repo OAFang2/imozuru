@@ -67,7 +67,7 @@ class EncodingTests(unittest.TestCase):
              str(SCRIPTS / "report.py"), str(ROOT / "examples/demo"), "--check"],
             capture_output=True, encoding="utf-8")
         self.assertEqual(res.returncode, 0, res.stderr)
-        self.assertIn("Verification OK", res.stdout)
+        self.assertIn("照合 OK", res.stdout)
 
 
 class PdfToTextTests(unittest.TestCase):
@@ -208,12 +208,12 @@ class MissingCommandTests(unittest.TestCase):
     def test_pdf_without_tools_fails_with_reason(self):
         with patch.object(fetch, "download", return_value=(b"%PDF-1.4\nscan", "application/pdf")):
             self.assertEqual(self.run_fetch("https://example.test/scan.pdf"), 1)
-        self.assertIn("missing pdftotext/pdftoppm/tesseract", self.stdout.getvalue())
+        self.assertIn("pdftotext・pdftoppm・tesseract が無い", self.stdout.getvalue())
         self.assertEqual(list(self.sources.iterdir()), [])
 
     def test_youtube_without_ytdlp_fails_with_reason(self):
         self.assertEqual(self.run_fetch("https://www.youtube.com/watch?v=example"), 1)
-        self.assertIn("yt-dlp is missing", self.stdout.getvalue())
+        self.assertIn("yt-dlp が無い", self.stdout.getvalue())
 
 
 if __name__ == "__main__":

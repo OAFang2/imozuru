@@ -1,12 +1,20 @@
 #!/usr/bin/env python3
-"""Follow paper references, citations, and authors through OpenAlex.
+"""論文の引用を前へ・後ろへたどる（OpenAlex）。
 
-Usage:
-    chain.py find <DOI or title>
-    chain.py refs <ID or DOI> [-n 20]
-    chain.py cites <ID or DOI> [-n 20]
-    chain.py author <author name or ID> [-n 20]
-    Add --log <topic_dir> --round N to append results to queries.jsonl.
+Bates 1989 の footnote chasing（後ろへ）と citation searching（前へ）を道具でやる。
+引用をたどると、その分野の言葉を知らなくても次の論文に行ける（Bates 1989 L301-302）。
+
+OpenAlex は1日 1,000 回まで無料の枠（x-ratelimit-limit-usd 0.1）。プリペイドの残高が
+0 なら枠を超えても止まるだけで課金されない。API キーや支払いの登録はしない。
+
+使い方:
+    chain.py find  <DOI か題名>          … 論文を特定して ID を出す（題名なら候補5件）
+    chain.py refs  <ID か DOI> [-n 20]    … 後ろへ: その論文が引いている文献
+    chain.py cites <ID か DOI> [-n 20]    … 前へ: その論文を引いている文献（被引用の多い順）
+    chain.py author <著者名か著者ID> [-n 20] … 著者で追う: その人の論文（被引用の多い順）
+                                            名前なら「# 別の候補」の行に同名の別人の ID も出す
+    --log <topic_dir> --round N を付けると、出した一覧を詳細レポートの記録（queries.jsonl）にも足す
+出力: 1行1本、タブ区切り（年 被引用数 ID 題名 DOI 無料PDF）
 """
 
 import json
@@ -36,7 +44,7 @@ class _SameOrigin(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl):
         fp.close()
         if not newurl.startswith(API + "/"):
-            raise ValueError(f"refusing redirect outside the API: {newurl}")
+            raise ValueError(f"API の外への転送はたどらない: {newurl}")
         return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 
@@ -51,7 +59,7 @@ def get(path: str, **params) -> dict:
     with _OPENER.open(req, timeout=60) as res:
         body = res.read(MAX_BYTES + 1)
     if len(body) > MAX_BYTES:
-        raise ValueError(f"response exceeds {MAX_BYTES:,} bytes")
+        raise ValueError(f"応答が {MAX_BYTES:,} バイトを超える")
     return json.loads(body)
 
 
@@ -69,7 +77,7 @@ def clean(s: object) -> str:
 def author_line(a: dict, aid: str) -> str:
     """著者1人を「名前 ID 所属 論文数」の1行にする。"""
     inst = ", ".join(clean(i.get("display_name") or "") for i in a.get("last_known_institutions") or [])
-    return f"{clean(a.get('display_name') or '')} {aid} {inst} {clean(a.get('works_count'))} works"
+    return f"{clean(a.get('display_name') or '')} {aid} {inst} 論文{clean(a.get('works_count'))}本"
 
 
 def search_title(key: str) -> list[dict]:
@@ -104,16 +112,16 @@ def resolve(key: str) -> dict:
     if WORK_ID.fullmatch(key) or "openalex.org/" in key:
         wid = key.rstrip("/").rsplit("/", 1)[-1]
         if not WORK_ID.fullmatch(wid):
-            raise SystemExit(f"invalid OpenAlex ID: {clean(key)}")
+            raise SystemExit(f"OpenAlex の ID の形ではない: {clean(key)}")
         return get(f"/works/{wid}", select=FIELDS)
     if key.startswith("10.") or "doi.org/" in key:
         doi = urllib.parse.unquote(key.split("doi.org/")[-1]) if "doi.org/" in key else key
         if any(part in {".", ".."} for part in doi.split("/")):
-            raise SystemExit(f"DOI contains a . or .. path segment: {clean(key)}")
+            raise SystemExit(f"DOI に「.」か「..」の区切りがある: {clean(key)}")
         return get(f"/works/doi:{urllib.parse.quote(doi, safe='/')}", select=FIELDS)
     hits = search_title(key)
     if not hits:
-        raise SystemExit(f"not found: {clean(key)}")
+        raise SystemExit(f"見つからない: {clean(key)}")
     return hits[0]
 
 
@@ -134,7 +142,7 @@ def main() -> int:
         value = args[i + 1] if i + 1 < len(args) else ""
         # isdigit() は「²」も数字と見なすので、ASCII の数字だけを通す
         if not re.fullmatch(r"[0-9]+", value) or not 1 <= int(value) <= MAX_N:
-            print(f"-n must be a number from 1 to {MAX_N}", file=sys.stderr)
+            print(f"-n には 1〜{MAX_N} の数を書く", file=sys.stderr)
             return 2
         n = int(value)
         del args[i:i + 2]
@@ -142,18 +150,18 @@ def main() -> int:
     if "--log" in args:
         i = args.index("--log")
         if i + 1 >= len(args):
-            print("--log requires a research topic directory", file=sys.stderr)
+            print("--log には調べものの置き場を書く", file=sys.stderr)
             return 2
         log_topic = args[i + 1]
         del args[i:i + 2]
         if "--round" not in args:
-            print("--log also requires --round N", file=sys.stderr)
+            print("--log には --round N も付ける", file=sys.stderr)
             return 2
     if "--round" in args:
         i = args.index("--round")
         value = args[i + 1] if i + 1 < len(args) else ""
         if not re.fullmatch(r"[0-9]+", value):
-            print("--round requires a round number", file=sys.stderr)
+            print("--round には周の数を書く", file=sys.stderr)
             return 2
         log_round = int(value)
         del args[i:i + 2]
@@ -167,7 +175,7 @@ def main() -> int:
         # 題名のときは候補を全部見せる。どれが本体かを読み手が確かめられるように。
         hits = [resolve(key)] if WORK_ID.fullmatch(key) or key.startswith("10.") or "/" in key else search_title(key)
         if not hits:
-            print(f"No candidates: {clean(key)} (retry with a DOI or fewer title words)")
+            print(f"候補なし: {clean(key)}（DOI で引き直すか、題名の語を減らす）")
         for w in hits:
             print(row(w))
         shown += hits
@@ -175,11 +183,11 @@ def main() -> int:
         # 応答の ID も次の問い合わせに入るので、形を確かめてから使う
         wid = (resolve(key).get("id") or "").rsplit("/", 1)[-1]
         if not WORK_ID.fullmatch(wid):
-            raise SystemExit(f"invalid work ID in response: {clean(wid)}")
+            raise SystemExit(f"応答の ID の形がおかしい: {clean(wid)}")
         flt = f"cited_by:{wid}" if cmd == "refs" else f"cites:{wid}"
         res = get("/works", filter=flt, sort="cited_by_count:desc",
                   **{"per-page": n}, select=FIELDS)
-        print(f"# {cmd} {wid}: top {len(res['results'])} of {clean(res['meta']['count'])}")
+        print(f"# {cmd} {wid} 全{clean(res['meta']['count'])}本中 上位{len(res['results'])}本")
         for w in res["results"]:
             print(row(w))
         shown += res["results"]
@@ -191,14 +199,14 @@ def main() -> int:
         else:
             hits = get("/authors", search=key, **{"per-page": 5})["results"]
         if not hits:
-            raise SystemExit(f"author not found: {clean(key)}")
+            raise SystemExit(f"著者が見つからない: {clean(key)}")
         ids = [(a.get("id") or "").rsplit("/", 1)[-1] for a in hits]
         if not all(AUTHOR_ID.fullmatch(i) for i in ids):
-            raise SystemExit(f"invalid author ID in response: {clean(' '.join(ids))}")
+            raise SystemExit(f"応答の著者 ID の形がおかしい: {clean(' '.join(ids))}")
         a, aid = hits[0], ids[0]
         print(f"# author {author_line(a, aid)}")
         for other, oid in zip(hits[1:], ids[1:]):
-            print(f"# Alternative candidate {author_line(other, oid)} (if this is the person, run chain.py author {oid})")
+            print(f"# 別の候補 {author_line(other, oid)}（この人なら chain.py author {oid}）")
         res = get("/works", filter=f"author.id:{aid}", sort="cited_by_count:desc",
                   **{"per-page": n}, select=FIELDS)
         for w in res["results"]:
@@ -246,5 +254,5 @@ if __name__ == "__main__":
     try:
         sys.exit(main())
     except (OSError, ValueError) as e:  # 接続の失敗・HTTP のエラー・壊れた JSON を1行で返す
-        print(f"Could not retrieve data: {type(e).__name__}: {clean(e)}", file=sys.stderr)
+        print(f"取れなかった: {type(e).__name__}: {clean(e)}", file=sys.stderr)
         sys.exit(1)

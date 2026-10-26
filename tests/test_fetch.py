@@ -175,7 +175,7 @@ class FetchPreservationTests(unittest.TestCase):
                 patch.object(fetch, "pdf_to_text", side_effect=self.pdf_text(text)), \
                 patch.object(fetch, "html_to_md", side_effect=OSError("404")):
             self.assertEqual(self.run_fetch("https://arxiv.org/pdf/2601.12345"), 1)
-        self.assertIn("body is too short (2000 characters)", self.stdout.getvalue())
+        self.assertIn("本文が短すぎる（2000文字）", self.stdout.getvalue())
         self.assertFalse(any(p.name.startswith(".") for p in self.sources.iterdir()))
 
     def test_media_type_is_case_insensitive(self):
@@ -279,7 +279,7 @@ class FetchPreservationTests(unittest.TestCase):
                 + b"</body></html>")
         with patch.object(fetch, "download", return_value=(body, "text/html")):
             self.assertEqual(self.run_fetch("https://hal.science/hal-01577896"), 1)
-        self.assertIn("FAIL\tpaper\taccess wall detected (you're not a bot)", self.stdout.getvalue())
+        self.assertIn("FAIL\tpaper\t壁に当たった（you're not a bot）", self.stdout.getvalue())
         self.assert_preserved(before)
 
     JATS = """<?xml version="1.0"?>
@@ -313,7 +313,7 @@ class FetchPreservationTests(unittest.TestCase):
         # 1行目は題名だけ。雑誌名や ID がつながらない
         self.assertEqual(lines[0], "# Environmental DNA for biomonitoring")
         self.assertIn("Mol Ecol / 2021 / https://doi.org/10.1111/mec.1 / PMC1234567", lines)
-        self.assertIn("Authors: Jan Pawlowski", lines)
+        self.assertIn("著者: Jan Pawlowski", lines)
         for line in ("## Abstract", "Short abstract text.", "## Introduction",
                      "First paragraph (Smith, 2020).",
                      "Second paragraph with a [dataset](https://example.org/data).",
@@ -330,7 +330,7 @@ class FetchPreservationTests(unittest.TestCase):
         error = fetch.urllib.error.HTTPError("https://www.ebi.ac.uk/", 404, "Not Found", {}, None)
         with patch.object(fetch, "download", side_effect=error):
             self.assertEqual(self.run_fetch("https://www.ncbi.nlm.nih.gov/pmc/articles/PMC7654321/"), 1)
-        self.assertIn("FAIL\tpaper\tEurope PMC has no full-text XML", self.stdout.getvalue())
+        self.assertIn("FAIL\tpaper\tEurope PMC に全文 XML が無い", self.stdout.getvalue())
         self.assert_preserved(before)
 
     def test_pmc_is_recognized_by_host_not_anywhere_in_url(self):
@@ -433,7 +433,7 @@ class FetchPreservationTests(unittest.TestCase):
                     self.assertEqual(self.run_fetch(url), 1)
                 download.assert_not_called()
                 self.assertEqual(list(self.sources.iterdir()), [])
-        self.assertIn("only http(s) URLs may be fetched", self.stdout.getvalue())
+        self.assertIn("http(s) の URL だけを取りに行く", self.stdout.getvalue())
 
 
 class OptionInjectionTests(unittest.TestCase):
@@ -502,27 +502,27 @@ class YoutubeCaptionTests(unittest.TestCase):
     def test_auto_captions_ask_only_the_spoken_language(self):
         # 吹き替えの音声にも ja-orig が付く。中身は翻訳なので取らない
         asked, body = self.run_youtube("en-US", auto={"en-orig": "English speech", "ja-orig": "吹き替え"})
-        self.assertEqual(asked, [("--write-subs", "en,zh,zh-Hans,zh-Hant"), ("--write-auto-subs", "en-orig")])
+        self.assertEqual(asked, [("--write-subs", "ja,en"), ("--write-auto-subs", "en-orig")])
         self.assertEqual(body, "[00:01] English speech")
         text = self.out.read_text(encoding="utf-8")
-        self.assertIn("\nSpeaker / 20220820\nCaptions: automatic", text)
+        self.assertIn("\nSpeaker / 20220820\n字幕: 自動", text)
         self.assertIn("v.en-orig.vtt", text)
 
-    def test_chinese_auto_captions(self):
-        asked, body = self.run_youtube("zh", auto={"zh-orig": "中文语音"})
-        self.assertEqual(asked[-1], ("--write-auto-subs", "zh-orig"))
-        self.assertEqual(body, "[00:01] 中文语音")
+    def test_japanese_auto_captions(self):
+        asked, body = self.run_youtube("ja", auto={"ja-orig": "日本語の音声"})
+        self.assertEqual(asked[-1], ("--write-auto-subs", "ja-orig"))
+        self.assertEqual(body, "[00:01] 日本語の音声")
 
-    def test_unknown_language_asks_original_english_or_chinese(self):
+    def test_unknown_language_asks_original_japanese_or_english(self):
         asked, body = self.run_youtube("", auto={"en-orig": "English speech"})
-        self.assertEqual(asked[-1], ("--write-auto-subs", "en-orig,zh-orig"))
+        self.assertEqual(asked[-1], ("--write-auto-subs", "ja-orig,en-orig"))
         self.assertEqual(body, "[00:01] English speech")
 
     def test_manual_captions_skip_auto_captions(self):
-        asked, body = self.run_youtube("en", manual={"zh": "手动中文字幕"}, auto={"en-orig": "English"})
-        self.assertEqual(asked, [("--write-subs", "en,zh,zh-Hans,zh-Hant")])
-        self.assertEqual(body, "[00:01] 手动中文字幕")
-        self.assertIn("Captions: manual v.zh.vtt", self.out.read_text(encoding="utf-8"))
+        asked, body = self.run_youtube("en", manual={"ja": "手動の日本語"}, auto={"en-orig": "English"})
+        self.assertEqual(asked, [("--write-subs", "ja,en")])
+        self.assertEqual(body, "[00:01] 手動の日本語")
+        self.assertIn("字幕: 手動 v.ja.vtt", self.out.read_text(encoding="utf-8"))
 
 
 class CjkPdfFloorTests(unittest.TestCase):
